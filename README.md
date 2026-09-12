@@ -9,12 +9,13 @@ backend-independent integer simulation contract, and explicit residency and
 device planning. It does not claim biological validation and it is not a game
 demo.
 
-## Phase 1 status
+## Current status
 
 Implemented:
 
 - CPU fixed-point LIF runtime;
 - resident and disk-backed CPU streamed execution;
+- optional resident CUDA backend with fixed-point tensor execution;
 - mmap-friendly `.scx` graph artifacts with CSR `.scb` blocks;
 - local MaleCNS Feather adapter with an explicit curated-node filter;
 - deterministic example graph and golden spike train;
@@ -23,23 +24,28 @@ Implemented:
 
 Not implemented:
 
-- CUDA kernels;
+- CUDA streamed residency;
 - WebGPU/WASM execution;
 - automatic MaleCNS downloads or a networked data pipeline;
 - biological or scientific validation of LIF parameters;
 - morphology and EM-volume simulation.
 
-Explicit `cuda` and `webgpu` selections fail with `not implemented`; they never
-fall back silently to CPU. `auto` currently resolves to CPU because that is the
-only implemented backend.
+Explicit `webgpu` selection fails with `not implemented`; explicit `cuda`
+selects the optional CUDA backend and reports a typed unavailable error when
+the runtime or host GPU cannot execute it. Neither selection falls back
+silently to CPU. `auto` currently resolves to CPU by design.
 
 ## Install
 
 ```bash
 python -m pip install -e ".[dev,data]"
+# Optional CUDA backend:
+python -m pip install -e ".[dev,data,cuda]"
 ```
 
 The core package does not depend on PyTorch or another accelerator runtime.
+The CUDA extra uses PyTorch lazily; importing the planner, CPU backend, or graph
+format does not import it.
 
 ## Run the example
 
@@ -171,7 +177,9 @@ The local curated conversion is measured at `211,577` neurons,
 `24,678,466` included edges, `1,349,920` excluded edges, and `0` saturated
 weights. Checksum loading and a one-timestep CPU smoke-run passed. These are
 artifact-validation measurements, not accelerator benchmarks or biological
-fidelity results.
+fidelity results. CUDA parity is `not tested` on the current host because
+minimal CUDA context allocation returned `CUDA_ERROR_OUT_OF_MEMORY` despite the
+driver reporting a visible device.
 
 ## References
 

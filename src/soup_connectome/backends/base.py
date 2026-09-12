@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from soup_connectome.config import Device, Residency, SimulationConfig
-from soup_connectome.errors import BackendNotImplementedError
+from soup_connectome.errors import BackendNotImplementedError, BackendUnavailableError
 from soup_connectome.sim.runtime import GraphSource, SimulationResult
 
 
@@ -39,7 +39,12 @@ def resolve_backend(device: Device | str) -> Backend:
 
         return CPUBackend()
     if selected is Device.cuda:
-        raise BackendNotImplementedError("cuda backend is not implemented in Phase 1")
+        from soup_connectome.backends.cuda import CUDABackend
+
+        backend = CUDABackend()
+        if not backend.available:
+            raise BackendUnavailableError(backend.reason)
+        return backend
     if selected is Device.webgpu:
         raise BackendNotImplementedError("webgpu backend is not implemented in Phase 1")
     raise BackendNotImplementedError(f"backend is not implemented: {selected.value}")

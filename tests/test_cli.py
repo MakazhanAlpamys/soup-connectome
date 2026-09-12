@@ -31,11 +31,15 @@ def test_auto_cli_reports_the_selected_backend() -> None:
     assert "requested_device=auto" in result.stdout
 
 
-def test_cli_rejects_unimplemented_cuda() -> None:
+def test_cli_cuda_never_falls_back_to_cpu() -> None:
     result = runner.invoke(app, ["run", "--dataset", "example", "--device", "cuda"])
 
-    assert result.exit_code != 0
-    assert "cuda" in result.stdout.lower()
+    if result.exit_code == 0:
+        assert "device=cuda" in result.stdout
+        assert "requested_device=cuda" in result.stdout
+    else:
+        assert "cuda" in result.stdout.lower()
+        assert "cpu" not in result.stdout.lower()
 
 
 def test_cli_uses_disk_backed_loader_for_streamed_artifact(tmp_path: Path) -> None:
