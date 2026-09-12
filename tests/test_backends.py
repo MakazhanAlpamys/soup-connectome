@@ -10,7 +10,7 @@ from soup_connectome.backends.webgpu import (
 from soup_connectome.backends.webgpu import (
     availability as webgpu_availability,
 )
-from soup_connectome.errors import BackendNotImplementedError, BackendUnavailableError
+from soup_connectome.errors import BackendUnavailableError
 from soup_connectome.graph.example import example_graph, example_simulation_config
 from soup_connectome.graph.format import open_artifact, write_artifact
 from soup_connectome.sim.runtime import run_graph
@@ -185,15 +185,30 @@ def test_webgpu_refractory_state_matches_cpu_when_available() -> None:
     assert webgpu == cpu
 
 
-def test_webgpu_streamed_residency_is_explicitly_unimplemented() -> None:
+def test_webgpu_streamed_artifact_matches_cpu_when_available(tmp_path: Path) -> None:
     available, reason = webgpu_availability()
     if not available:
         pytest.skip(reason)
 
-    with pytest.raises(BackendNotImplementedError, match="streamed"):
-        resolve_backend("webgpu").run(
-            example_graph(),
-            example_simulation_config(),
-            timesteps=1,
+    artifact_path = write_artifact(example_graph(), tmp_path / "example.scx")
+    graph = open_artifact(artifact_path)
+    config = example_simulation_config()
+    cpu = run_graph(
+        graph,
+        config,
+        timesteps=4,
+        initial_potentials=(32767, 0, 0, 0),
+        residency="streamed",
+    )
+    try:
+        webgpu = resolve_backend("webgpu").run(
+            graph,
+            config,
+            timesteps=4,
+            initial_potentials=(32767, 0, 0, 0),
             residency="streamed",
         )
+    except BackendUnavailableError as exc:
+        pytest.skip(str(exc))
+
+    assert webgpu == cpu

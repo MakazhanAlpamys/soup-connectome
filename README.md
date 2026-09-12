@@ -16,7 +16,7 @@ Implemented:
 - CPU fixed-point LIF runtime;
 - resident and disk-backed CPU streamed execution;
 - optional resident and streamed CUDA backend with fixed-point tensor execution;
-- optional resident WebGPU backend with canonical WGSL integer kernels;
+- optional resident and streamed WebGPU backend with canonical WGSL integer kernels;
 - mmap-friendly `.scx` graph artifacts with CSR `.scb` blocks;
 - local MaleCNS Feather adapter with an explicit curated-node filter;
 - deterministic example graph and golden spike train;
@@ -25,7 +25,7 @@ Implemented:
 
 Not implemented:
 
-- WebGPU streamed residency and browser/WASM packaging;
+- browser/WASM packaging;
 - automatic MaleCNS downloads or a networked data pipeline;
 - biological or scientific validation of LIF parameters;
 - morphology and EM-volume simulation.
@@ -58,6 +58,7 @@ soup-connectome run --dataset example --device cpu
 soup-connectome run --dataset example --device cpu --residency streamed
 soup-connectome run --dataset example --device cuda --residency streamed
 soup-connectome run --dataset example --device webgpu
+soup-connectome run --dataset example --device webgpu --residency streamed
 soup-connectome plan --dataset example --device cpu
 soup-connectome benchmark --device auto
 ```
@@ -99,9 +100,10 @@ scope, block ranges, and SHA-256 checksums. Blocks use source-indexed CSR.
 Resident loading materializes all blocks, while `--residency streamed` opens
 the artifact lazily and reads/validates one block at a time. This is a
 correctness and memory-shape implementation, not a throughput claim; streamed
-I/O performance is `not tested`. The CUDA streamed path transfers one source
-block at a time and currently has no prefetch cache. The current example writer
-accepts local in-memory graph data; it does not fetch remote files.
+I/O performance is `not tested`. The CUDA and WebGPU streamed paths transfer
+one active source block at a time and currently have no prefetch cache. The
+current example writer accepts local in-memory graph data; it does not fetch
+remote files.
 
 ## Convert local MaleCNS files
 

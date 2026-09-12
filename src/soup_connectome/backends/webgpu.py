@@ -12,13 +12,12 @@ from typing import Any
 
 from soup_connectome.config import Residency, SimulationConfig
 from soup_connectome.errors import (
-    BackendNotImplementedError,
     BackendUnavailableError,
     ConfigurationError,
     FixedPointOverflowError,
     GraphValidationError,
 )
-from soup_connectome.graph.format import ConnectomeGraph
+from soup_connectome.graph.format import ConnectomeGraph, DiskGraphArtifact, GraphBlock
 from soup_connectome.sim.runtime import GraphSource, SimulationResult
 
 INT32_MIN = -(2**31)
@@ -185,12 +184,14 @@ def _buffer(device: Any, wgpu: Any, data: bytes, usage: Any) -> Any:
     return device.create_buffer_with_data(data=data or b"\0\0\0\0", usage=usage)
 
 
-def _flatten_graph(graph: ConnectomeGraph) -> tuple[list[int], list[int], list[int], list[int]]:
+def _flatten_blocks(
+    blocks: tuple[GraphBlock, ...] | list[GraphBlock],
+) -> tuple[list[int], list[int], list[int], list[int]]:
     sources: list[int] = []
     targets: list[int] = []
     weights: list[int] = []
     delays: list[int] = []
-    for block in graph.blocks:
+    for block in blocks:
         for local_source, row in enumerate(block.rows):
             source = block.source_start + local_source
             for edge in row:
@@ -199,6 +200,99 @@ def _flatten_graph(graph: ConnectomeGraph) -> tuple[list[int], list[int], list[i
                 weights.append(edge.weight)
                 delays.append(edge.delay)
     return sources, targets, weights, delays
+
+
+def _flatten_graph(graph: ConnectomeGraph) -> tuple[list[int], list[int], list[int], list[int]]:
+    return _flatten_blocks(graph.blocks)
+
+
+def _flatten_active_block(
+    block: GraphBlock, spike_flags: tuple[bool, ...]
+) -> tuple[list[int], list[int], list[int], list[int]]:
+    """Flatten only rows whose source spiked in the current timestep."""
+
+    sources: list[int] = []
+    targets: list[int] = []
+    weights: list[int] = []
+    delays: list[int] = []
+    for local_source, row in enumerate(block.rows):
+        source = block.source_start + local_source
+        if not row or not spike_flags[source]:
+            continue
+        for edge in row:
+            sources.append(source)
+            targets.append(edge.target)
+            weights.append(edge.weight)
+            delays.append(edge.delay)
+    return sources, targets, weights, delays
+
+
+def _validate_initial_state(
+    graph: GraphSource,
+    initial_potentials: tuple[int, ...] | None,
+    initial_refractory: tuple[int, ...] | None,
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    potentials = initial_potentials or (0,) * graph.n_neurons
+    refractory = initial_refractory or (0,) * graph.n_neurons
+    if len(potentials) != graph.n_neurons or len(refractory) != graph.n_neurons:
+        raise GraphValidationError("initial state length does not match graph")
+    if any(not INT32_MIN <= value <= INT32_MAX for value in potentials):
+        raise FixedPointOverflowError("initial potential exceeds signed int32 range")
+    if any(value < 0 or value > UINT16_MAX for value in refractory):
+        raise ValueError("initial refractory counter is outside uint16 range")
+    return potentials, refractory
+
+
+def _config_values(
+    neuron_count: int,
+    bucket_count: int,
+    config: SimulationConfig,
+    *,
+    current_bucket: int,
+    edge_count: int,
+) -> list[int]:
+    return [
+        neuron_count,
+        current_bucket % bucket_count,
+        bucket_count,
+        config.threshold,
+        config.reset,
+        config.refractory_steps,
+        len(config.decay_shifts),
+        edge_count,
+        *config.decay_shifts,
+        *([0] * (CONFIG_WORDS - 8 - len(config.decay_shifts))),
+    ]
+
+
+def _read_spike_flags(device: Any, spike_buffer: Any, neuron_count: int) -> tuple[bool, ...]:
+    raw_spikes = bytes(device.queue.read_buffer(spike_buffer))
+    spike_values = (
+        struct.unpack(f"<{neuron_count}I", raw_spikes[: neuron_count * 4]) if neuron_count else ()
+    )
+    return tuple(value != 0 for value in spike_values)
+
+
+def _read_error(device: Any, error_buffer: Any) -> int:
+    return struct.unpack("<i", bytes(device.queue.read_buffer(error_buffer))[:4])[0]
+
+
+def _create_pipelines(device: Any, wgpu: Any) -> tuple[Any, Any, Any, Any]:
+    shader = device.create_shader_module(code=WGSL_LIF_SHADER)
+    step_layout = _layout(device, wgpu, 6, 0, set())
+    scatter_layout = _layout(device, wgpu, 8, 1, set())
+    pipeline_layout = device.create_pipeline_layout(
+        bind_group_layouts=[step_layout, scatter_layout]
+    )
+    step_pipeline = device.create_compute_pipeline(
+        layout=pipeline_layout,
+        compute={"module": shader, "entry_point": "lif_step"},
+    )
+    scatter_pipeline = device.create_compute_pipeline(
+        layout=pipeline_layout,
+        compute={"module": shader, "entry_point": "schedule_edges"},
+    )
+    return step_layout, scatter_layout, step_pipeline, scatter_pipeline
 
 
 def _layout(
@@ -390,6 +484,175 @@ def _run_resident(
     )
 
 
+def _run_streamed(
+    wgpu: Any,
+    device: Any,
+    graph: ConnectomeGraph | DiskGraphArtifact,
+    config: SimulationConfig,
+    *,
+    timesteps: int,
+    initial_potentials: tuple[int, ...] | None,
+    initial_refractory: tuple[int, ...] | None,
+) -> SimulationResult:
+    """Run with resident state and one uploaded source block at a time.
+
+    This intentionally synchronizes after each block so temporary GPU buffers
+    can be released before the next block is uploaded. It establishes the
+    streamed memory contract first; upload batching and prefetch are future
+    performance work and remain not tested.
+    """
+
+    potentials, refractory = _validate_initial_state(graph, initial_potentials, initial_refractory)
+    if len(config.decay_shifts) > MAX_DECAY_SHIFTS:
+        raise ConfigurationError(f"WebGPU supports at most {MAX_DECAY_SHIFTS} decay shifts")
+
+    neuron_count = graph.n_neurons
+    bucket_count = graph.max_delay + 1
+    if neuron_count > INT32_MAX:
+        raise ConfigurationError("WebGPU configuration counts must fit signed int32")
+
+    usage = wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_SRC
+    copy_usage = usage | wgpu.BufferUsage.COPY_DST
+    potential_buffer = _buffer(device, wgpu, _pack_i32(list(potentials)), usage)
+    refractory_buffer = _buffer(device, wgpu, _pack_u32(list(refractory)), usage)
+    spike_buffer = _buffer(device, wgpu, _pack_u32([0] * neuron_count), usage)
+    arrival_buffer = _buffer(
+        device,
+        wgpu,
+        _pack_i32([0] * (bucket_count * neuron_count)),
+        wgpu.BufferUsage.STORAGE,
+    )
+    config_buffer = _buffer(device, wgpu, b"\0" * (CONFIG_WORDS * 4), copy_usage)
+    error_buffer = _buffer(device, wgpu, _pack_i32([0]), copy_usage)
+    step_layout, scatter_layout, step_pipeline, scatter_pipeline = _create_pipelines(device, wgpu)
+    step_group = _bind_group(
+        device,
+        step_layout,
+        [
+            potential_buffer,
+            refractory_buffer,
+            spike_buffer,
+            arrival_buffer,
+            config_buffer,
+            error_buffer,
+        ],
+    )
+
+    # The pipeline layout contains group 1 even for lif_step. A zero-edge
+    # group keeps the dispatch layout valid while step execution uses only the
+    # resident state buffers.
+    dummy_edge_buffer = _buffer(device, wgpu, _pack_u32([0]), usage)
+    dummy_weight_buffer = _buffer(device, wgpu, _pack_i32([0]), usage)
+    dummy_config_buffer = _buffer(device, wgpu, b"\0" * (CONFIG_WORDS * 4), usage)
+    dummy_scatter_group = _bind_group(
+        device,
+        scatter_layout,
+        [
+            dummy_edge_buffer,
+            dummy_edge_buffer,
+            dummy_weight_buffer,
+            dummy_edge_buffer,
+            spike_buffer,
+            arrival_buffer,
+            dummy_config_buffer,
+            error_buffer,
+        ],
+    )
+
+    spike_history: list[tuple[bool, ...]] = []
+    for current_bucket in range(timesteps):
+        step_values = _config_values(
+            neuron_count,
+            bucket_count,
+            config,
+            current_bucket=current_bucket,
+            edge_count=0,
+        )
+        device.queue.write_buffer(config_buffer, 0, _pack_i32(step_values))
+        device.queue.write_buffer(error_buffer, 0, _pack_i32([0]))
+        _dispatch(
+            device,
+            step_pipeline,
+            [step_group, dummy_scatter_group],
+            (neuron_count + WORKGROUP_SIZE - 1) // WORKGROUP_SIZE,
+        )
+        if _read_error(device, error_buffer):
+            raise FixedPointOverflowError("webgpu fixed-point operation exceeded int32 range")
+        spike_flags = _read_spike_flags(device, spike_buffer, neuron_count)
+        spike_history.append(spike_flags)
+
+        for block in graph.iter_blocks():
+            sources, targets, weights, delays = _flatten_active_block(block, spike_flags)
+            edge_count = len(sources)
+            if not edge_count:
+                continue
+            if edge_count > INT32_MAX:
+                raise ConfigurationError("WebGPU configuration counts must fit signed int32")
+
+            source_buffer = _buffer(device, wgpu, _pack_u32(sources), usage)
+            target_buffer = _buffer(device, wgpu, _pack_u32(targets), usage)
+            weight_buffer = _buffer(device, wgpu, _pack_i32(weights), usage)
+            delay_buffer = _buffer(device, wgpu, _pack_u32(delays), usage)
+            block_config_buffer = _buffer(
+                device,
+                wgpu,
+                _pack_i32(
+                    _config_values(
+                        neuron_count,
+                        bucket_count,
+                        config,
+                        current_bucket=current_bucket,
+                        edge_count=edge_count,
+                    )
+                ),
+                usage,
+            )
+            scatter_group = _bind_group(
+                device,
+                scatter_layout,
+                [
+                    source_buffer,
+                    target_buffer,
+                    weight_buffer,
+                    delay_buffer,
+                    spike_buffer,
+                    arrival_buffer,
+                    block_config_buffer,
+                    error_buffer,
+                ],
+            )
+            device.queue.write_buffer(error_buffer, 0, _pack_i32([0]))
+            _dispatch(
+                device,
+                scatter_pipeline,
+                [step_group, scatter_group],
+                (edge_count + WORKGROUP_SIZE - 1) // WORKGROUP_SIZE,
+            )
+            if _read_error(device, error_buffer):
+                raise FixedPointOverflowError("webgpu fixed-point operation exceeded int32 range")
+
+        # read_buffer calls above provide the synchronization boundary before
+        # the next timestep writes the shared step configuration.
+
+    raw_potentials = bytes(device.queue.read_buffer(potential_buffer))
+    raw_refractory = bytes(device.queue.read_buffer(refractory_buffer))
+    final_potentials = (
+        struct.unpack(f"<{neuron_count}i", raw_potentials[: neuron_count * 4])
+        if neuron_count
+        else ()
+    )
+    final_refractory = (
+        struct.unpack(f"<{neuron_count}I", raw_refractory[: neuron_count * 4])
+        if neuron_count
+        else ()
+    )
+    return SimulationResult(
+        spikes=tuple(spike_history),
+        final_potentials=tuple(final_potentials),
+        final_refractory=tuple(final_refractory),
+    )
+
+
 class WebGPUBackend:
     name = "webgpu"
 
@@ -410,14 +673,35 @@ class WebGPUBackend:
             raise BackendUnavailableError(self.reason)
         if timesteps < 0:
             raise ValueError("timesteps cannot be negative")
-        if Residency(residency) is Residency.streamed:
-            raise BackendNotImplementedError(
-                "WebGPU streamed block dispatch is not implemented; use resident residency"
-            )
-        if not isinstance(graph, ConnectomeGraph):
-            raise GraphValidationError("WebGPU resident execution requires a materialized graph")
         _wgpu, utils = _require_wgpu()
         device = utils.get_default_device()
+        if Residency(residency) is Residency.streamed:
+            if not isinstance(graph, (ConnectomeGraph, DiskGraphArtifact)):
+                raise GraphValidationError("webgpu streamed execution requires a graph artifact")
+            try:
+                return _run_streamed(
+                    _wgpu,
+                    device,
+                    graph,
+                    config,
+                    timesteps=timesteps,
+                    initial_potentials=initial_potentials,
+                    initial_refractory=initial_refractory,
+                )
+            except (
+                BackendUnavailableError,
+                ConfigurationError,
+                FixedPointOverflowError,
+                GraphValidationError,
+                ValueError,
+            ):
+                raise
+            except Exception as exc:  # pragma: no cover - adapter/driver-specific failures
+                raise BackendUnavailableError(
+                    f"WebGPU streamed execution failed on this host: {exc}"
+                ) from exc
+        if not isinstance(graph, ConnectomeGraph):
+            raise GraphValidationError("WebGPU resident execution requires a materialized graph")
         try:
             return _run_resident(
                 _wgpu,
