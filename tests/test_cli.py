@@ -1,6 +1,10 @@
+from pathlib import Path
+
 from typer.testing import CliRunner
 
 from soup_connectome.cli import app
+from soup_connectome.graph.example import example_graph
+from soup_connectome.graph.format import write_artifact
 
 runner = CliRunner()
 
@@ -32,3 +36,25 @@ def test_cli_rejects_unimplemented_cuda() -> None:
 
     assert result.exit_code != 0
     assert "cuda" in result.stdout.lower()
+
+
+def test_cli_uses_disk_backed_loader_for_streamed_artifact(tmp_path: Path) -> None:
+    artifact_path = write_artifact(example_graph(), tmp_path / "example.scx")
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--dataset",
+            str(artifact_path),
+            "--device",
+            "cpu",
+            "--residency",
+            "streamed",
+            "--timesteps",
+            "4",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "residency=streamed" in result.stdout

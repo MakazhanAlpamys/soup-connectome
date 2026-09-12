@@ -14,7 +14,7 @@ demo.
 Implemented:
 
 - CPU fixed-point LIF runtime;
-- resident and CPU reference-streamed execution;
+- resident and disk-backed CPU streamed execution;
 - mmap-friendly `.scx` graph artifacts with CSR `.scb` blocks;
 - local MaleCNS Feather adapter with an explicit curated-node filter;
 - deterministic example graph and golden spike train;
@@ -83,9 +83,12 @@ graph.scx/
 ```
 
 The manifest records source provenance, license, dtypes, quantization metadata,
-scope, block ranges, and SHA-256 checksums. Blocks use source-indexed CSR so a
-future backend can load outgoing connections on demand. The current example
-writer accepts local in-memory graph data; it does not fetch remote files.
+scope, block ranges, and SHA-256 checksums. Blocks use source-indexed CSR.
+Resident loading materializes all blocks, while `--residency streamed` opens
+the artifact lazily and reads/validates one block at a time. This is a
+correctness and memory-shape implementation, not a throughput claim; streamed
+I/O performance is `not tested`. The current example writer accepts local
+in-memory graph data; it does not fetch remote files.
 
 ## Convert local MaleCNS files
 

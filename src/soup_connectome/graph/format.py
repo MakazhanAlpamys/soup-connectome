@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 import struct
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -58,6 +58,19 @@ class NeuronRecord:
     type_code: int = 0
     transmitter_code: int = 0
     side_code: int = 0
+
+
+def _validate_block_edges(block: GraphBlock, n_neurons: int) -> None:
+    if block.source_start < 0 or block.source_start + block.source_count > n_neurons:
+        raise GraphValidationError("block source range is outside the graph")
+    for row in block.rows:
+        for edge in row:
+            if not 0 <= edge.target < n_neurons:
+                raise GraphValidationError("edge target is outside the graph")
+            if not INT16_MIN <= edge.weight <= INT16_MAX:
+                raise GraphValidationError("edge weight is outside int16 range")
+            if not 1 <= edge.delay <= UINT16_MAX:
+                raise GraphValidationError("edge delay must be within positive uint16 range")
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +133,11 @@ class ConnectomeGraph:
         if expected_source != self.n_neurons:
             raise GraphValidationError("blocks do not cover every source neuron")
 
+    def iter_blocks(self) -> Iterator[GraphBlock]:
+        """Yield resident blocks through the common graph-source interface."""
+
+        yield from self.blocks
+
 
 class BlockDescriptor(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -159,6 +177,61 @@ class GraphArtifact:
     path: Path
     manifest: ConnectomeManifest
     graph: ConnectomeGraph
+
+
+@dataclass(slots=True)
+class DiskGraphArtifact:
+    """Manifest and neuron metadata with lazy, one-block-at-a-time loading."""
+
+    path: Path
+    manifest: ConnectomeManifest
+    neurons: tuple[NeuronRecord, ...]
+    verify_checksums: bool = True
+    _max_delay: int | None = None
+
+    @property
+    def n_neurons(self) -> int:
+        return self.manifest.n_neurons
+
+    @property
+    def edge_count(self) -> int:
+        return self.manifest.n_edges
+
+    @property
+    def max_delay(self) -> int:
+        if self._max_delay is None:
+            self._max_delay = max(
+                (edge.delay for block in self.iter_blocks() for row in block.rows for edge in row),
+                default=0,
+            )
+        return self._max_delay
+
+    def iter_blocks(self) -> Iterator[GraphBlock]:
+        """Read, validate, and yield one block without retaining prior blocks."""
+
+        expected_source = 0
+        for descriptor in self.manifest.blocks:
+            block_path = safe_join(self.path, descriptor.filename)
+            try:
+                data = block_path.read_bytes()
+            except OSError as exc:
+                raise GraphFormatError(f"cannot read block: {block_path}") from exc
+            if self.verify_checksums:
+                data = _verify_file(block_path, descriptor.byte_size, descriptor.sha256)
+            block = deserialize_block(data)
+            if (
+                block.source_start != descriptor.source_start
+                or block.source_count != descriptor.source_count
+                or block.edge_count != descriptor.edge_count
+            ):
+                raise GraphFormatError(f"block descriptor does not match file: {block_path}")
+            if block.source_start != expected_source:
+                raise GraphValidationError("blocks must cover contiguous source ranges")
+            _validate_block_edges(block, self.n_neurons)
+            expected_source += block.source_count
+            yield block
+        if expected_source != self.n_neurons:
+            raise GraphValidationError("blocks do not cover every source neuron")
 
 
 def _sha256(data: bytes) -> str:
@@ -419,8 +492,7 @@ def _verify_file(path: Path, expected_size: int, expected_sha256: str) -> bytes:
     return data
 
 
-def load_artifact(destination: Path, *, verify_checksums: bool = True) -> GraphArtifact:
-    destination = Path(destination)
+def _read_manifest(destination: Path) -> ConnectomeManifest:
     manifest_path = safe_join(destination, "manifest.json")
     try:
         manifest = ConnectomeManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
@@ -428,35 +500,47 @@ def load_artifact(destination: Path, *, verify_checksums: bool = True) -> GraphA
         raise GraphFormatError(f"cannot read manifest: {manifest_path}") from exc
     if manifest.format_id != "scx" or manifest.format_version != 1:
         raise GraphFormatError("unsupported connectome artifact format")
+    return manifest
 
+
+def _read_neurons(
+    destination: Path,
+    manifest: ConnectomeManifest,
+    *,
+    verify_checksums: bool,
+) -> tuple[NeuronRecord, ...]:
     neurons_path = safe_join(destination, "neurons.bin")
-    neurons_data = neurons_path.read_bytes()
+    try:
+        neurons_data = neurons_path.read_bytes()
+    except OSError as exc:
+        raise GraphFormatError(f"cannot read neuron table: {neurons_path}") from exc
     if verify_checksums:
         neurons_data = _verify_file(
             neurons_path, manifest.neurons_byte_size, manifest.neurons_sha256
         )
-    neurons = _deserialize_neurons(neurons_data, manifest.n_neurons)
+    return _deserialize_neurons(neurons_data, manifest.n_neurons)
 
-    blocks = []
-    for descriptor in manifest.blocks:
-        block_path = safe_join(destination, descriptor.filename)
-        data = block_path.read_bytes()
-        if verify_checksums:
-            data = _verify_file(block_path, descriptor.byte_size, descriptor.sha256)
-        block = deserialize_block(data)
-        if (
-            block.source_start != descriptor.source_start
-            or block.source_count != descriptor.source_count
-            or block.edge_count != descriptor.edge_count
-        ):
-            raise GraphFormatError(f"block descriptor does not match file: {block_path}")
-        blocks.append(block)
+
+def open_artifact(destination: Path, *, verify_checksums: bool = True) -> DiskGraphArtifact:
+    """Open an artifact without materializing its connection blocks."""
+
+    destination = Path(destination)
+    manifest = _read_manifest(destination)
+    neurons = _read_neurons(destination, manifest, verify_checksums=verify_checksums)
+    return DiskGraphArtifact(destination, manifest, neurons, verify_checksums)
+
+
+def load_artifact(destination: Path, *, verify_checksums: bool = True) -> GraphArtifact:
+    """Load an artifact and materialize all blocks in memory."""
+
+    streamed = open_artifact(destination, verify_checksums=verify_checksums)
+    blocks = tuple(streamed.iter_blocks())
     try:
-        graph = ConnectomeGraph(manifest.n_neurons, neurons, tuple(blocks))
+        graph = ConnectomeGraph(streamed.n_neurons, streamed.neurons, blocks)
     except GraphValidationError:
         raise
     except Exception as exc:
         raise GraphFormatError("loaded graph failed validation") from exc
-    if graph.edge_count != manifest.n_edges:
+    if graph.edge_count != streamed.edge_count:
         raise GraphFormatError("manifest edge count does not match blocks")
-    return GraphArtifact(destination, manifest, graph)
+    return GraphArtifact(streamed.path, streamed.manifest, graph)

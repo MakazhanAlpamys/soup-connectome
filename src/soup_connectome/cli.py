@@ -12,7 +12,12 @@ from soup_connectome.backends.base import resolve_backend
 from soup_connectome.config import Device, Preset, Residency, Scope, SimulationConfig, resolve_axes
 from soup_connectome.errors import ConnectomeError
 from soup_connectome.graph.example import example_graph, example_simulation_config
-from soup_connectome.graph.format import ConnectomeGraph, load_artifact
+from soup_connectome.graph.format import (
+    ConnectomeGraph,
+    DiskGraphArtifact,
+    load_artifact,
+    open_artifact,
+)
 from soup_connectome.graph.malecns import (
     MaleCNSColumns,
     WeightQuantizer,
@@ -25,12 +30,14 @@ app = typer.Typer(help="Portable runtime for sparse biological connectomes.")
 console = Console()
 
 
-def _load_dataset(dataset: str) -> ConnectomeGraph:
+def _load_dataset(dataset: str, residency: Residency) -> ConnectomeGraph | DiskGraphArtifact:
     if dataset == "example":
         return example_graph()
     path = Path(dataset)
     if not path.is_dir():
         raise ValueError(f"dataset is not a registered local artifact: {dataset}")
+    if residency is Residency.streamed:
+        return open_artifact(path)
     return load_artifact(path).graph
 
 
@@ -64,7 +71,7 @@ def run(
 ) -> None:
     try:
         axes = resolve_axes(preset=preset, device=device, residency=residency, scope=scope)
-        graph = _load_dataset(dataset)
+        graph = _load_dataset(dataset, axes.residency)
         backend = resolve_backend(axes.device)
         result = backend.run(
             graph,
@@ -96,7 +103,7 @@ def plan(
 ) -> None:
     try:
         axes = resolve_axes(preset=preset, device=device, residency=residency, scope=scope)
-        graph = _load_dataset(dataset)
+        graph = _load_dataset(dataset, axes.residency)
         execution_plan = plan_graph(graph, axes, capacity_bytes=capacity_bytes)
     except (ConnectomeError, ValueError) as exc:
         _error(str(exc))
@@ -118,7 +125,7 @@ def benchmark(
 ) -> None:
     try:
         axes = resolve_axes(preset=preset, device=device, residency=residency, scope=scope)
-        graph = _load_dataset(dataset)
+        graph = _load_dataset(dataset, axes.residency)
         backend = resolve_backend(axes.device)
         started = time.perf_counter()
         result = backend.run(

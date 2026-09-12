@@ -5,8 +5,7 @@ from typing import Protocol
 
 from soup_connectome.config import Device, Residency, SimulationConfig
 from soup_connectome.errors import BackendNotImplementedError
-from soup_connectome.graph.format import ConnectomeGraph
-from soup_connectome.sim.runtime import SimulationResult
+from soup_connectome.sim.runtime import GraphSource, SimulationResult
 
 
 class Backend(Protocol):
@@ -15,7 +14,7 @@ class Backend(Protocol):
 
     def run(
         self,
-        graph: ConnectomeGraph,
+        graph: GraphSource,
         config: SimulationConfig,
         *,
         timesteps: int,

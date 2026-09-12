@@ -1,6 +1,5 @@
 from soup_connectome.config import Residency, SimulationConfig
-from soup_connectome.graph.format import ConnectomeGraph
-from soup_connectome.sim.runtime import SimulationResult, run_graph
+from soup_connectome.sim.runtime import GraphSource, SimulationResult, run_graph
 
 
 class CPUBackend:
@@ -9,7 +8,7 @@ class CPUBackend:
 
     def run(
         self,
-        graph: ConnectomeGraph,
+        graph: GraphSource,
         config: SimulationConfig,
         *,
         timesteps: int,

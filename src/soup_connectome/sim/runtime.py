@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from soup_connectome.config import Residency, SimulationConfig
 from soup_connectome.errors import GraphValidationError
-from soup_connectome.graph.format import ConnectomeGraph
+from soup_connectome.graph.format import ConnectomeGraph, DiskGraphArtifact, GraphBlock
 from soup_connectome.sim.lif import NeuronState, advance_neuron, checked_add
 
 
@@ -23,6 +24,9 @@ class SimulationResult:
     def spike_digest(self) -> str:
         encoded = bytes(1 if spike else 0 for timestep in self.spikes for spike in timestep)
         return hashlib.sha256(encoded).hexdigest()
+
+
+GraphSource = ConnectomeGraph | DiskGraphArtifact
 
 
 class _DelayLine:
@@ -45,7 +49,7 @@ class _DelayLine:
 
 
 def _validate_initial_state(
-    graph: ConnectomeGraph,
+    graph: GraphSource,
     initial_potentials: tuple[int, ...] | None,
     initial_refractory: tuple[int, ...] | None,
 ) -> tuple[tuple[int, ...], tuple[int, ...]]:
@@ -57,16 +61,20 @@ def _validate_initial_state(
 
 
 def _schedule_spikes(
-    graph: ConnectomeGraph,
+    graph: GraphSource,
     spikes: tuple[bool, ...],
     delay_line: _DelayLine,
     residency: Residency,
 ) -> None:
     if residency is Residency.resident:
-        blocks = graph.blocks
+        if not isinstance(graph, ConnectomeGraph):
+            raise GraphValidationError(
+                "resident execution requires a materialized graph; use streamed residency"
+            )
+        blocks: Iterable[GraphBlock] = graph.blocks
     elif residency is Residency.streamed:
-        # This iterator is the CPU reference for a future disk-backed loader.
-        blocks = tuple(block for block in graph.blocks)
+        # DiskGraphArtifact reads and validates one block per iteration.
+        blocks = graph.iter_blocks()
     else:
         raise ValueError(f"unsupported residency: {residency}")
 
@@ -80,7 +88,7 @@ def _schedule_spikes(
 
 
 def run_graph(
-    graph: ConnectomeGraph,
+    graph: GraphSource,
     config: SimulationConfig,
     *,
     timesteps: int,

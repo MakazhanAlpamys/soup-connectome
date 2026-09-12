@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from soup_connectome.config import Device, Residency, RuntimeAxes
-from soup_connectome.graph.format import ConnectomeGraph, serialize_block
+from soup_connectome.graph.format import ConnectomeGraph, DiskGraphArtifact, serialize_block
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,22 +16,29 @@ class ExecutionPlan:
     evidence: str
 
 
-def _resident_bytes(graph: ConnectomeGraph) -> int:
+GraphSource = ConnectomeGraph | DiskGraphArtifact
+
+
+def _resident_bytes(graph: GraphSource) -> int:
     neuron_bytes = graph.n_neurons * 16
-    block_bytes = sum(len(serialize_block(block)) for block in graph.blocks)
+    blocks = graph.blocks if isinstance(graph, ConnectomeGraph) else graph.iter_blocks()
+    block_bytes = sum(len(serialize_block(block)) for block in blocks)
     state_bytes = graph.n_neurons * 12
     return neuron_bytes + block_bytes + state_bytes
 
 
-def _streamed_bytes(graph: ConnectomeGraph) -> int:
+def _streamed_bytes(graph: GraphSource) -> int:
     neuron_bytes = graph.n_neurons * 16
-    largest_block = max((len(serialize_block(block)) for block in graph.blocks), default=0)
+    largest_block = max(
+        (len(serialize_block(block)) for block in graph.iter_blocks()),
+        default=0,
+    )
     state_bytes = graph.n_neurons * 12
     return neuron_bytes + largest_block + state_bytes
 
 
 def plan_graph(
-    graph: ConnectomeGraph,
+    graph: GraphSource,
     axes: RuntimeAxes,
     *,
     capacity_bytes: int | None,
