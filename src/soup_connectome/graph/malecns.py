@@ -71,8 +71,15 @@ class ConversionReport:
 
 
 _EDGE_RUN = struct.Struct("<qqi")
+_ENDPOINT_RUN = struct.Struct("<Q")
 _DEFAULT_BATCH_SIZE = 65536
 _DEFAULT_SORT_CHUNK_SIZE = 100000
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedSortRuns:
+    edge_runs: tuple[Path, ...]
+    endpoint_runs: tuple[Path, ...]
 
 
 def _round_nearest_even(numerator: int, denominator: int) -> int:
@@ -244,44 +251,6 @@ def _weight_rows(
         )
 
 
-def _feather_endpoint_ids(
-    path: Path,
-    columns: MaleCNSColumns,
-    *,
-    batch_size: int,
-) -> set[int]:
-    """Collect unique endpoints with Arrow kernels instead of Python row loops."""
-
-    path = _require_local_file(path, "weights")
-    try:
-        import pyarrow.compute as compute_api
-        import pyarrow.dataset as dataset_api
-
-        dataset = dataset_api.dataset(path, format=dataset_api.IpcFileFormat())
-        available = set(dataset.schema.names)
-    except ImportError as exc:
-        raise DataSchemaError("MaleCNS conversion requires optional dependency pyarrow") from exc
-    except Exception as exc:
-        raise DataSchemaError(f"cannot open Feather source: {path}") from exc
-
-    selected = [columns.weight_pre, columns.weight_post]
-    missing = [column for column in selected if column not in available]
-    if missing:
-        raise DataSchemaError(f"missing columns in {path.name}: {', '.join(missing)}")
-    endpoint_ids: set[int] = set()
-    try:
-        scanner = dataset.scanner(columns=selected, batch_size=batch_size, use_threads=False)
-        for batch in scanner.to_batches():
-            for index, column in enumerate(selected):
-                for value in compute_api.unique(batch.column(index)).to_pylist():
-                    endpoint_ids.add(_as_body_id(value, column))
-    except DataSchemaError:
-        raise
-    except Exception as exc:
-        raise DataSchemaError(f"cannot scan Feather source: {path}") from exc
-    return endpoint_ids
-
-
 def _write_edge_run(path: Path, edges: list[tuple[int, int, int]]) -> None:
     edges.sort()
     with path.open("wb") as stream:
@@ -297,6 +266,104 @@ def _read_edge_run(path: Path) -> Iterator[tuple[int, int, int]]:
             yield _EDGE_RUN.unpack(data)
 
 
+def _write_endpoint_run(path: Path, endpoint_ids: Iterable[int]) -> None:
+    with path.open("wb") as stream:
+        for endpoint_id in sorted(endpoint_ids):
+            stream.write(_ENDPOINT_RUN.pack(endpoint_id))
+
+
+def _read_endpoint_run(path: Path) -> Iterator[int]:
+    with path.open("rb") as stream:
+        while data := stream.read(_ENDPOINT_RUN.size):
+            if len(data) != _ENDPOINT_RUN.size:
+                raise DataSchemaError(f"truncated temporary endpoint run: {path}")
+            yield _ENDPOINT_RUN.unpack(data)[0]
+
+
+def _prepare_sorted_weight_runs(
+    path: Path,
+    columns: MaleCNSColumns,
+    *,
+    batch_size: int,
+    sort_chunk_size: int,
+    temporary_directory: Path,
+    include_all_endpoints: bool,
+    annotation_ids: set[int],
+    neurotransmitters: dict[int, str],
+    excluded_labels: set[str],
+    write_edge_runs: bool = True,
+    write_endpoint_runs: bool = True,
+) -> _PreparedSortRuns:
+    """Create edge and compact endpoint runs in one bounded source pass."""
+
+    if sort_chunk_size <= 0:
+        raise ValueError("sort_chunk_size must be positive")
+    edge_runs: list[Path] = []
+    endpoint_runs: list[Path] = []
+    chunk: list[tuple[int, int, int]] = []
+
+    def flush() -> None:
+        if not chunk:
+            return
+        if write_edge_runs:
+            edge_path = temporary_directory / f"run_{len(edge_runs):05d}.bin"
+            _write_edge_run(edge_path, chunk)
+            edge_runs.append(edge_path)
+        if write_endpoint_runs:
+            if include_all_endpoints:
+                endpoint_ids = {body_id for row in chunk for body_id in row[:2]}
+            else:
+                endpoint_ids = {
+                    body_id
+                    for pre_external, post_external, _ in chunk
+                    if neurotransmitters.get(pre_external, "unknown") not in excluded_labels
+                    for body_id in (pre_external, post_external)
+                }
+            endpoint_ids.difference_update(annotation_ids)
+            if endpoint_ids:
+                endpoint_path = temporary_directory / f"endpoint_{len(endpoint_runs):05d}.bin"
+                _write_endpoint_run(endpoint_path, endpoint_ids)
+                endpoint_runs.append(endpoint_path)
+
+    for row in _weight_rows(path, columns, batch_size=batch_size):
+        chunk.append(row)
+        if len(chunk) >= sort_chunk_size:
+            flush()
+            chunk = []
+    if chunk:
+        flush()
+    return _PreparedSortRuns(tuple(edge_runs), tuple(endpoint_runs))
+
+
+def _external_endpoint_ids(
+    path: Path,
+    columns: MaleCNSColumns,
+    *,
+    batch_size: int,
+    sort_chunk_size: int,
+    temporary_parent: Path,
+    annotation_ids: set[int],
+) -> set[int]:
+    """Collect only endpoints absent from annotations using bounded temp runs."""
+
+    with tempfile.TemporaryDirectory(
+        prefix=".soup-connectome-endpoints-", dir=temporary_parent
+    ) as temporary_root:
+        prepared = _prepare_sorted_weight_runs(
+            path,
+            columns,
+            batch_size=batch_size,
+            sort_chunk_size=sort_chunk_size,
+            temporary_directory=Path(temporary_root),
+            include_all_endpoints=True,
+            annotation_ids=annotation_ids,
+            neurotransmitters={},
+            excluded_labels=set(),
+            write_edge_runs=False,
+        )
+        return _merged_endpoint_ids(prepared.endpoint_runs)
+
+
 def _sorted_weight_rows(
     path: Path,
     columns: MaleCNSColumns,
@@ -305,22 +372,27 @@ def _sorted_weight_rows(
     sort_chunk_size: int,
     temporary_directory: Path,
 ) -> Iterator[tuple[int, int, int]]:
-    if sort_chunk_size <= 0:
-        raise ValueError("sort_chunk_size must be positive")
-    runs: list[Path] = []
-    chunk: list[tuple[int, int, int]] = []
-    for row in _weight_rows(path, columns, batch_size=batch_size):
-        chunk.append(row)
-        if len(chunk) >= sort_chunk_size:
-            run_path = temporary_directory / f"run_{len(runs):05d}.bin"
-            _write_edge_run(run_path, chunk)
-            runs.append(run_path)
-            chunk = []
-    if chunk:
-        run_path = temporary_directory / f"run_{len(runs):05d}.bin"
-        _write_edge_run(run_path, chunk)
-        runs.append(run_path)
+    prepared = _prepare_sorted_weight_runs(
+        path,
+        columns,
+        batch_size=batch_size,
+        sort_chunk_size=sort_chunk_size,
+        temporary_directory=temporary_directory,
+        include_all_endpoints=False,
+        annotation_ids=set(),
+        neurotransmitters={},
+        excluded_labels=set(),
+        write_endpoint_runs=False,
+    )
+    yield from _merged_weight_rows(prepared.edge_runs)
+
+
+def _merged_weight_rows(runs: Sequence[Path]) -> Iterator[tuple[int, int, int]]:
     yield from heapq.merge(*(_read_edge_run(run) for run in runs))
+
+
+def _merged_endpoint_ids(runs: Sequence[Path]) -> set[int]:
+    return set(heapq.merge(*(_read_endpoint_run(run) for run in runs)))
 
 
 def _file_sha256(path: Path) -> str:
@@ -382,9 +454,15 @@ def convert_male_cns(
     neurotransmitters = _load_neurotransmitters(
         neurotransmitters_path, columns, batch_size=batch_size
     )
+    destination.parent.mkdir(parents=True, exist_ok=True)
     if scope is Scope.full:
-        external_ids = set(annotations) | _feather_endpoint_ids(
-            weights_path, columns, batch_size=batch_size
+        external_ids = set(annotations) | _external_endpoint_ids(
+            weights_path,
+            columns,
+            batch_size=batch_size,
+            sort_chunk_size=sort_chunk_size,
+            temporary_parent=destination.parent,
+            annotation_ids=set(annotations),
         )
     else:
         endpoint_ids: set[int] = set()
@@ -459,7 +537,6 @@ def convert_male_cns(
                 ),
             )
 
-    destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
         prefix=".soup-connectome-convert-", dir=destination.parent
     ) as temporary_root:
