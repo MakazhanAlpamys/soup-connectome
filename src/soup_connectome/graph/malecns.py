@@ -392,7 +392,13 @@ def _merged_weight_rows(runs: Sequence[Path]) -> Iterator[tuple[int, int, int]]:
 
 
 def _merged_endpoint_ids(runs: Sequence[Path]) -> set[int]:
-    return set(heapq.merge(*(_read_endpoint_run(run) for run in runs)))
+    unique_ids: set[int] = set()
+    previous: int | None = None
+    for endpoint_id in heapq.merge(*(_read_endpoint_run(run) for run in runs)):
+        if endpoint_id != previous:
+            unique_ids.add(endpoint_id)
+            previous = endpoint_id
+    return unique_ids
 
 
 def _file_sha256(path: Path) -> str:
