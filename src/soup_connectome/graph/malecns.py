@@ -244,6 +244,44 @@ def _weight_rows(
         )
 
 
+def _feather_endpoint_ids(
+    path: Path,
+    columns: MaleCNSColumns,
+    *,
+    batch_size: int,
+) -> set[int]:
+    """Collect unique endpoints with Arrow kernels instead of Python row loops."""
+
+    path = _require_local_file(path, "weights")
+    try:
+        import pyarrow.compute as compute_api
+        import pyarrow.dataset as dataset_api
+
+        dataset = dataset_api.dataset(path, format=dataset_api.IpcFileFormat())
+        available = set(dataset.schema.names)
+    except ImportError as exc:
+        raise DataSchemaError("MaleCNS conversion requires optional dependency pyarrow") from exc
+    except Exception as exc:
+        raise DataSchemaError(f"cannot open Feather source: {path}") from exc
+
+    selected = [columns.weight_pre, columns.weight_post]
+    missing = [column for column in selected if column not in available]
+    if missing:
+        raise DataSchemaError(f"missing columns in {path.name}: {', '.join(missing)}")
+    endpoint_ids: set[int] = set()
+    try:
+        scanner = dataset.scanner(columns=selected, batch_size=batch_size, use_threads=False)
+        for batch in scanner.to_batches():
+            for index, column in enumerate(selected):
+                for value in compute_api.unique(batch.column(index)).to_pylist():
+                    endpoint_ids.add(_as_body_id(value, column))
+    except DataSchemaError:
+        raise
+    except Exception as exc:
+        raise DataSchemaError(f"cannot scan Feather source: {path}") from exc
+    return endpoint_ids
+
+
 def _write_edge_run(path: Path, edges: list[tuple[int, int, int]]) -> None:
     edges.sort()
     with path.open("wb") as stream:
@@ -345,9 +383,9 @@ def convert_male_cns(
         neurotransmitters_path, columns, batch_size=batch_size
     )
     if scope is Scope.full:
-        # The full artifact is anchored by the annotation table. The conversion
-        # pass below validates that every included edge endpoint is represented.
-        external_ids = set(annotations)
+        external_ids = set(annotations) | _feather_endpoint_ids(
+            weights_path, columns, batch_size=batch_size
+        )
     else:
         endpoint_ids: set[int] = set()
         for pre_external, post_external, _ in _weight_rows(
@@ -438,7 +476,7 @@ def convert_male_cns(
             "quantizer": quantizer.model_dump(mode="json"),
             "delay_steps": delay_steps,
             "scope_rule": (
-                "all annotation IDs for full (included endpoints must be annotated); "
+                "all annotation IDs plus raw endpoints for full; "
                 "endpoints of included edges for compact"
             ),
             "type_category_codes": type_codes,

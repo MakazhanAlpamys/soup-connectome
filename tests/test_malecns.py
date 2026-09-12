@@ -142,6 +142,45 @@ def test_excluded_neurotransmitter_edges_are_reported(
     assert artifact.manifest.conversion["excluded_edges"] == 2
 
 
+def test_full_scope_retains_unannotated_weight_endpoints(
+    malecns_tables: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    _, annotations, _ = malecns_tables
+    weights = tmp_path / "weights-with-unannotated-endpoint.feather"
+    neurotransmitters = tmp_path / "neurotransmitters-with-unannotated-endpoint.feather"
+    _write_feather(
+        weights,
+        {
+            "pre_id": [200, 100, 100, 400],
+            "post_id": [300, 300, 200, 300],
+            "strength": [4, 2, 3, 1],
+        },
+    )
+    _write_feather(
+        neurotransmitters,
+        {
+            "body": [100, 200, 300, 400],
+            "nt": ["acetylcholine", "gaba", "glutamate", "acetylcholine"],
+        },
+    )
+
+    report = convert_male_cns(
+        weights,
+        annotations,
+        neurotransmitters,
+        tmp_path / "unannotated-endpoint.scx",
+        columns=_columns(),
+        sign_mapping={"acetylcholine": 1, "gaba": -1, "glutamate": 1},
+        block_size=2,
+        batch_size=1,
+    )
+
+    artifact = load_artifact(tmp_path / "unannotated-endpoint.scx")
+    assert report.n_neurons == 4
+    assert report.n_edges == 4
+    assert tuple(neuron.external_id for neuron in artifact.graph.neurons) == (100, 200, 300, 400)
+
+
 def test_quantizer_rejects_or_saturates_int16_overflow() -> None:
     with pytest.raises(QuantizationError):
         WeightQuantizer(numerator=40000).quantize(1)
