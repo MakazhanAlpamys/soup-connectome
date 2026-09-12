@@ -14,6 +14,14 @@ class GraphValidationError(GraphFormatError):
     """A graph has internally inconsistent or out-of-range values."""
 
 
+class DataSchemaError(ConnectomeError):
+    """A local source table is missing or has incompatible columns."""
+
+
+class QuantizationError(ConnectomeError):
+    """A source value cannot be represented by the declared quantizer."""
+
+
 class ChecksumMismatchError(GraphFormatError):
     """An artifact file differs from its manifest checksum."""
 

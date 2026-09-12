@@ -35,7 +35,7 @@ only implemented backend.
 ## Install
 
 ```bash
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,data]"
 ```
 
 The core package does not depend on PyTorch or another accelerator runtime.
@@ -85,6 +85,42 @@ The manifest records source provenance, license, dtypes, quantization metadata,
 scope, block ranges, and SHA-256 checksums. Blocks use source-indexed CSR so a
 future backend can load outgoing connections on demand. The current example
 writer accepts local in-memory graph data; it does not fetch remote files.
+
+## Convert local MaleCNS files
+
+The adapter requires three files supplied by the user: connection weights, body
+annotations, and body neurotransmitters. It never downloads them. Inspect each
+local Feather schema first:
+
+```bash
+soup-connectome inspect --file path/to/body-annotations.feather
+soup-connectome inspect --file path/to/body-neurotransmitters.feather
+```
+
+Then provide the exact annotation and neurotransmitter column names and an
+explicit sign mapping:
+
+```bash
+soup-connectome convert \
+  --weights path/to/connectome-weights.feather \
+  --annotations path/to/body-annotations.feather \
+  --neurotransmitters path/to/body-neurotransmitters.feather \
+  --output male-cns.scx \
+  --annotation-id BODY_ID_COLUMN \
+  --annotation-type TYPE_COLUMN \
+  --annotation-side SIDE_COLUMN \
+  --neurotransmitter-id BODY_ID_COLUMN \
+  --neurotransmitter-name LABEL_COLUMN \
+  --sign-mapping '{"acetylcholine": 1, "gaba": -1}'
+```
+
+The verified connection defaults are `body_pre`, `body_post`, and `weight`; use
+`--weight-pre`, `--weight-post`, and `--weight-value` when a local table differs.
+Rows are scanned in batches, externally sorted by source, and emitted as source
+blocks. The default delay and chunk sizes are chosen representation estimates,
+not measured biological or performance bounds. Weight overflow rejects the
+conversion by default; `--overflow saturate` records the saturation count in
+the manifest.
 
 For MaleCNS, use the connection weights, body annotations, and
 neurotransmitter files described by the [Janelia download page](https://male-cns.janelia.org/download/).

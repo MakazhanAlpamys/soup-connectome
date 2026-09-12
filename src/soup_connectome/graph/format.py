@@ -7,6 +7,7 @@ import struct
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -149,6 +150,7 @@ class ConnectomeManifest(BaseModel):
     scope: Scope = Scope.full
     neurons_byte_size: int = Field(ge=0)
     neurons_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    conversion: dict[str, Any] = Field(default_factory=dict)
     blocks: tuple[BlockDescriptor, ...]
 
 
@@ -293,6 +295,7 @@ def write_artifact(
     source_url: str | None = None,
     license: str | None = None,
     scope: Scope = Scope.full,
+    conversion_metadata: dict[str, Any] | None = None,
 ) -> Path:
     """Write a new deterministic artifact and refuse to overwrite an existing one."""
 
@@ -306,6 +309,7 @@ def write_artifact(
         source_url=source_url,
         license=license,
         scope=scope,
+        conversion_metadata=conversion_metadata,
     )
 
 
@@ -319,6 +323,7 @@ def write_artifact_from_blocks(
     source_url: str | None = None,
     license: str | None = None,
     scope: Scope = Scope.full,
+    conversion_metadata: dict[str, Any] | None = None,
 ) -> Path:
     """Write blocks incrementally so a caller need not hold the whole graph."""
 
@@ -368,6 +373,7 @@ def write_artifact_from_blocks(
         neurons_byte_size=len(neurons_data),
         neurons_sha256=_sha256(neurons_data),
         scope=scope,
+        conversion=conversion_metadata or {},
         blocks=tuple(descriptors),
     )
     safe_join(destination, "manifest.json").write_text(

@@ -130,6 +130,7 @@ src/soup_connectome/
     format.py       # manifest and binary block validation
     builder.py      # local source data -> .scx
     example.py      # deterministic small graph
+    malecns.py      # local Feather adapter and deterministic conversion
   sim/
     lif.py          # canonical fixed-point state transitions
     planner.py      # residency and capacity planning, no torch import
@@ -226,16 +227,21 @@ meaning.
 
 ## Graph construction
 
-The builder converts local Feather inputs into the artifact. The expected
-source inputs are:
+The MaleCNS adapter converts local Feather inputs into the artifact. The
+expected source inputs are:
 
 - MaleCNS connection weights;
 - body annotations; and
 - body neurotransmitter annotations.
 
 The conversion joins source identifiers, assigns dense indices, applies the
-declared deterministic weight/sign quantization, sorts outgoing edges by the
-canonical key, and emits blocks in source order.
+declared deterministic weight/sign quantization, externally sorts outgoing
+edges by the canonical key, and emits blocks in source order. `pyarrow` is an
+optional data extra and is imported only inside the adapter. Column mappings
+for annotations and neurotransmitter labels are explicit; the adapter never
+guesses a source schema. The conversion records source checksums, column
+mappings, sign mapping, category codes, quantizer, delay fallback, and any
+saturations in the manifest.
 
 The builder must use chunked input and retain at most the current conversion
 working block plus bounded metadata required for index assignment. The precise
@@ -244,8 +250,8 @@ diagnostic field when the platform exposes it; it must not present that value as
 a guarantee.
 
 The converter never reads or downloads synapse-point, synapse-partner, or EM
-volume files. Missing optional annotations produce an explicit error when the
-requested graph requires them.
+volume files. Missing required local tables or explicitly mapped columns
+produce an actionable schema error.
 
 For reproducibility, the conversion configuration, source checksums, sorting
 key, quantizer, and sign mapping are recorded in the manifest. A second
@@ -362,6 +368,8 @@ soup-connectome run --dataset example --device cpu
 soup-connectome run --dataset example --device auto
 soup-connectome benchmark --device cpu
 soup-connectome plan --dataset example --device cpu
+soup-connectome inspect --file path/to/table.feather
+soup-connectome convert --weights ... --annotations ... --neurotransmitters ... --output ...
 ```
 
 The final two commands are diagnostic tools: `benchmark` labels results as
@@ -446,7 +454,8 @@ silently decided here:
 - exact Pydantic field names and serialization aliases;
 - exact binary header layout and alignment details;
 - the example graph topology and its golden spike fixture;
-- the integer weight quantizer configuration for a future MaleCNS conversion;
+- a biologically calibrated mapping from MaleCNS weights and neurotransmitters
+  to LIF parameters;
 - the cache replacement policy for a real streamed backend;
 - CUDA and WebGPU kernel structure;
 - a scientifically justified mapping from MaleCNS annotations to LIF

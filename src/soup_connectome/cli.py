@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import Optional
@@ -12,6 +13,12 @@ from soup_connectome.config import Device, Preset, Residency, Scope, SimulationC
 from soup_connectome.errors import ConnectomeError
 from soup_connectome.graph.example import example_graph, example_simulation_config
 from soup_connectome.graph.format import ConnectomeGraph, load_artifact
+from soup_connectome.graph.malecns import (
+    MaleCNSColumns,
+    WeightQuantizer,
+    convert_male_cns,
+    feather_columns,
+)
 from soup_connectome.sim.planner import plan_graph
 
 app = typer.Typer(help="Portable runtime for sparse biological connectomes.")
@@ -130,3 +137,91 @@ def benchmark(
         f"residency={axes.residency} scope={axes.scope} "
         f"timesteps={timesteps} wall_seconds={elapsed:.6f} spikes={result.spike_count}"
     )
+
+
+@app.command("convert")
+def convert(
+    weights: Path = typer.Option(..., help="Local MaleCNS connection Feather file."),
+    annotations: Path = typer.Option(..., help="Local MaleCNS body annotation Feather file."),
+    neurotransmitters: Path = typer.Option(
+        ..., help="Local MaleCNS body neurotransmitter Feather file."
+    ),
+    output: Path = typer.Option(..., help="New .scx artifact directory."),
+    annotation_id: str = typer.Option(..., help="Body ID column in annotations."),
+    neurotransmitter_id: str = typer.Option(..., help="Body ID column in neurotransmitters."),
+    neurotransmitter_name: str = typer.Option(..., help="Neurotransmitter label column."),
+    annotation_type: Optional[str] = typer.Option(None, help="Optional annotation type column."),
+    annotation_side: Optional[str] = typer.Option(None, help="Optional annotation side column."),
+    weight_pre: str = typer.Option("body_pre", help="Presynaptic body ID column."),
+    weight_post: str = typer.Option("body_post", help="Postsynaptic body ID column."),
+    weight_value: str = typer.Option("weight", help="Connection weight column."),
+    sign_mapping: str = typer.Option(
+        ..., help='JSON mapping, for example `{"acetylcholine": 1, "gaba": -1}`.'
+    ),
+    block_size: int = typer.Option(100000, min=1, help="Source block size; chosen estimate."),
+    batch_size: int = typer.Option(65536, min=1, help="Feather scan batch size; chosen estimate."),
+    sort_chunk_size: int = typer.Option(
+        100000, min=1, help="External-sort chunk size; chosen estimate."
+    ),
+    weight_scale_num: int = typer.Option(1, min=1, help="Quantizer numerator."),
+    weight_scale_den: int = typer.Option(1, min=1, help="Quantizer denominator."),
+    overflow: str = typer.Option("reject", help="Quantizer overflow policy: reject or saturate."),
+    scope: Scope = typer.Option(Scope.full, help="Artifact graph scope."),
+    delay_steps: int = typer.Option(
+        1, min=1, help="Default edge delay; not a biological measurement."
+    ),
+) -> None:
+    try:
+        parsed_sign_mapping = json.loads(sign_mapping)
+        if not isinstance(parsed_sign_mapping, dict):
+            raise ValueError("sign mapping JSON must be an object")
+        columns = MaleCNSColumns(
+            weight_pre=weight_pre,
+            weight_post=weight_post,
+            weight_value=weight_value,
+            annotation_id=annotation_id,
+            annotation_type=annotation_type,
+            annotation_side=annotation_side,
+            neurotransmitter_id=neurotransmitter_id,
+            neurotransmitter_name=neurotransmitter_name,
+        )
+        report = convert_male_cns(
+            weights,
+            annotations,
+            neurotransmitters,
+            output,
+            columns=columns,
+            sign_mapping=parsed_sign_mapping,
+            block_size=block_size,
+            quantizer=WeightQuantizer(
+                numerator=weight_scale_num,
+                denominator=weight_scale_den,
+                overflow=overflow,
+            ),
+            scope=scope,
+            delay_steps=delay_steps,
+            batch_size=batch_size,
+            sort_chunk_size=sort_chunk_size,
+        )
+    except (ConnectomeError, ValueError, TypeError) as exc:
+        _error(str(exc))
+    console.print(
+        "measured "
+        f"converted={report.artifact_path} neurons={report.n_neurons} "
+        f"edges={report.n_edges} saturated_weights={report.saturated_weights}"
+    )
+
+
+@app.command("inspect")
+def inspect(
+    file: Path = typer.Option(..., help="Local Feather file whose schema should be shown."),
+) -> None:
+    """Show local Feather columns without downloading or scanning table rows."""
+
+    try:
+        columns = feather_columns(file)
+    except (ConnectomeError, ValueError) as exc:
+        _error(str(exc))
+    console.print(f"local schema file={file} columns={len(columns)}")
+    for column in columns:
+        console.print(f"- {column}")

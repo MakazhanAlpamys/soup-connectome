@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 from soup_connectome.config import Scope
 from soup_connectome.graph.format import (
@@ -75,6 +76,7 @@ def build_artifact(
     source_url: str | None = None,
     license: str | None = None,
     scope: Scope = Scope.full,
+    conversion_metadata: dict[str, Any] | None = None,
 ) -> Path:
     """Write a local graph using the canonical artifact writer."""
 
@@ -85,6 +87,7 @@ def build_artifact(
         source_url=source_url,
         license=license,
         scope=scope,
+        conversion_metadata=conversion_metadata,
     )
 
 
@@ -99,6 +102,7 @@ def build_artifact_from_rows(
     source_url: str | None = None,
     license: str | None = None,
     scope: Scope = Scope.full,
+    conversion_metadata: dict[str, Any] | None = None,
 ) -> Path:
     """Build a local artifact from source-ordered rows without whole-graph buffering."""
 
@@ -113,4 +117,5 @@ def build_artifact_from_rows(
         source_url=source_url,
         license=license,
         scope=scope,
+        conversion_metadata=conversion_metadata,
     )

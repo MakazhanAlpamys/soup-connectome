@@ -115,7 +115,7 @@ src/soup_connectome/
   cli.py
   config.py
   errors.py
-  graph/{__init__,builder,example,format}.py
+  graph/{__init__,builder,example,format,malecns}.py
   sim/{__init__,lif,planner,runtime}.py
   backends/{__init__,base,cpu,cuda,webgpu}.py
 tests/
@@ -138,5 +138,7 @@ tests/
 - No optional accelerator dependency is imported at module scope.
 - README and CLI distinguish measured output from estimates and untested
   behavior.
+- The local MaleCNS adapter exposes schema inspection and deterministic
+  Feather-to-`.scx` conversion without network access.
 - Source changes are reviewed with `ruff check`, `ruff format --check`, and
   `git diff --check` before commit.
