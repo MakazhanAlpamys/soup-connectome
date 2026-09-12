@@ -172,6 +172,10 @@ def convert(
     weight_scale_den: int = typer.Option(1, min=1, help="Quantizer denominator."),
     overflow: str = typer.Option("reject", help="Quantizer overflow policy: reject or saturate."),
     scope: Scope = typer.Option(Scope.full, help="Artifact graph scope."),
+    node_filter: str = typer.Option(
+        "raw_endpoints",
+        help="Node source: raw_endpoints or annotations.",
+    ),
     delay_steps: int = typer.Option(
         1, min=1, help="Default edge delay; not a biological measurement."
     ),
@@ -205,6 +209,7 @@ def convert(
                 overflow=overflow,
             ),
             scope=scope,
+            node_filter=node_filter,
             delay_steps=delay_steps,
             batch_size=batch_size,
             sort_chunk_size=sort_chunk_size,

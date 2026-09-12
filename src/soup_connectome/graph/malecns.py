@@ -293,6 +293,7 @@ def _prepare_sorted_weight_runs(
     excluded_labels: set[str],
     write_edge_runs: bool = True,
     write_endpoint_runs: bool = True,
+    allowed_node_ids: set[int] | None = None,
 ) -> _PreparedSortRuns:
     """Create edge and compact endpoint runs in one bounded source pass."""
 
@@ -326,6 +327,10 @@ def _prepare_sorted_weight_runs(
                 endpoint_runs.append(endpoint_path)
 
     for row in _weight_rows(path, columns, batch_size=batch_size):
+        if allowed_node_ids is not None and not (
+            row[0] in allowed_node_ids and row[1] in allowed_node_ids
+        ):
+            continue
         chunk.append(row)
         if len(chunk) >= sort_chunk_size:
             flush()
@@ -371,6 +376,7 @@ def _sorted_weight_rows(
     batch_size: int,
     sort_chunk_size: int,
     temporary_directory: Path,
+    allowed_node_ids: set[int] | None = None,
 ) -> Iterator[tuple[int, int, int]]:
     prepared = _prepare_sorted_weight_runs(
         path,
@@ -383,6 +389,7 @@ def _sorted_weight_rows(
         neurotransmitters={},
         excluded_labels=set(),
         write_endpoint_runs=False,
+        allowed_node_ids=allowed_node_ids,
     )
     yield from _merged_weight_rows(prepared.edge_runs)
 
@@ -419,6 +426,7 @@ def convert_male_cns(
     sign_mapping: dict[str, int],
     block_size: int,
     excluded_neurotransmitters: Sequence[str] = (),
+    node_filter: Literal["raw_endpoints", "annotations"] = "raw_endpoints",
     quantizer: WeightQuantizer | None = None,
     scope: Scope = Scope.full,
     delay_steps: int = 1,
@@ -439,6 +447,10 @@ def convert_male_cns(
     if destination.exists():
         raise ArtifactExistsError(f"artifact already exists: {destination}")
     scope = Scope(scope)
+    if node_filter not in ("raw_endpoints", "annotations"):
+        raise DataSchemaError(f"unsupported node_filter: {node_filter}")
+    if node_filter == "annotations" and scope is not Scope.full:
+        raise DataSchemaError("node_filter=annotations requires scope=full")
     if delay_steps < 1 or delay_steps > 2**16 - 1:
         raise DataSchemaError("delay_steps must fit positive uint16")
     if not sign_mapping:
@@ -461,7 +473,9 @@ def convert_male_cns(
         neurotransmitters_path, columns, batch_size=batch_size
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if scope is Scope.full:
+    if node_filter == "annotations":
+        external_ids = set(annotations)
+    elif scope is Scope.full:
         external_ids = set(annotations) | _external_endpoint_ids(
             weights_path,
             columns,
@@ -513,6 +527,7 @@ def convert_male_cns(
             batch_size=batch_size,
             sort_chunk_size=sort_chunk_size,
             temporary_directory=temporary_directory,
+            allowed_node_ids=set(annotations) if node_filter == "annotations" else None,
         ):
             neurotransmitter = neurotransmitters.get(pre_external, "unknown")
             if neurotransmitter in excluded_labels:
@@ -556,6 +571,7 @@ def convert_male_cns(
             "columns": columns.model_dump(mode="json"),
             "sign_mapping": normalized_signs,
             "excluded_neurotransmitters": sorted(excluded_labels),
+            "node_filter": node_filter,
             "quantizer": quantizer.model_dump(mode="json"),
             "delay_steps": delay_steps,
             "scope_rule": (
