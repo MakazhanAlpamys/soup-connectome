@@ -1,9 +1,12 @@
+from pathlib import Path
+
 import pytest
 
 from soup_connectome.backends.base import resolve_backend
 from soup_connectome.backends.cuda import availability as cuda_availability
-from soup_connectome.errors import BackendNotImplementedError, BackendUnavailableError
+from soup_connectome.errors import BackendUnavailableError
 from soup_connectome.graph.example import example_graph, example_simulation_config
+from soup_connectome.graph.format import open_artifact, write_artifact
 from soup_connectome.sim.runtime import run_graph
 
 
@@ -82,15 +85,30 @@ def test_cuda_refractory_state_matches_cpu_when_available() -> None:
     assert cuda == cpu
 
 
-def test_cuda_streamed_residency_is_explicitly_unimplemented() -> None:
+def test_cuda_streamed_artifact_matches_cpu_when_available(tmp_path: Path) -> None:
     available, reason = cuda_availability()
     if not available:
         pytest.skip(reason)
 
-    with pytest.raises(BackendNotImplementedError, match="streamed"):
-        resolve_backend("cuda").run(
-            example_graph(),
-            example_simulation_config(),
-            timesteps=1,
+    artifact_path = write_artifact(example_graph(), tmp_path / "example.scx")
+    graph = open_artifact(artifact_path)
+    config = example_simulation_config()
+    cpu = run_graph(
+        graph,
+        config,
+        timesteps=4,
+        initial_potentials=(32767, 0, 0, 0),
+        residency="streamed",
+    )
+    try:
+        cuda = resolve_backend("cuda").run(
+            graph,
+            config,
+            timesteps=4,
+            initial_potentials=(32767, 0, 0, 0),
             residency="streamed",
         )
+    except BackendUnavailableError as exc:
+        pytest.skip(str(exc))
+
+    assert cuda == cpu

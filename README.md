@@ -15,7 +15,7 @@ Implemented:
 
 - CPU fixed-point LIF runtime;
 - resident and disk-backed CPU streamed execution;
-- optional resident CUDA backend with fixed-point tensor execution;
+- optional resident and streamed CUDA backend with fixed-point tensor execution;
 - mmap-friendly `.scx` graph artifacts with CSR `.scb` blocks;
 - local MaleCNS Feather adapter with an explicit curated-node filter;
 - deterministic example graph and golden spike train;
@@ -24,7 +24,6 @@ Implemented:
 
 Not implemented:
 
-- CUDA streamed residency;
 - WebGPU/WASM execution;
 - automatic MaleCNS downloads or a networked data pipeline;
 - biological or scientific validation of LIF parameters;
@@ -52,6 +51,7 @@ format does not import it.
 ```bash
 soup-connectome run --dataset example --device cpu
 soup-connectome run --dataset example --device cpu --residency streamed
+soup-connectome run --dataset example --device cuda --residency streamed
 soup-connectome plan --dataset example --device cpu
 soup-connectome benchmark --device auto
 ```
@@ -93,8 +93,9 @@ scope, block ranges, and SHA-256 checksums. Blocks use source-indexed CSR.
 Resident loading materializes all blocks, while `--residency streamed` opens
 the artifact lazily and reads/validates one block at a time. This is a
 correctness and memory-shape implementation, not a throughput claim; streamed
-I/O performance is `not tested`. The current example writer accepts local
-in-memory graph data; it does not fetch remote files.
+I/O performance is `not tested`. The CUDA streamed path transfers one source
+block at a time and currently has no prefetch cache. The current example writer
+accepts local in-memory graph data; it does not fetch remote files.
 
 ## Convert local MaleCNS files
 
