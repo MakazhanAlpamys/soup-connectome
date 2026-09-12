@@ -20,9 +20,10 @@ The architecture separates three concerns:
 3. backend and residency implementations that must preserve the canonical
    integer semantics.
 
-The initial implementation contains only the CPU backend. CUDA, WebGPU, and
-streamed execution are specified as contracts and explicit failure modes so
-that later implementations cannot silently change semantics.
+The initial implementation contains a CPU backend with both resident and
+reference-streamed execution. CUDA and WebGPU are specified as contracts and
+explicit failure modes so that later implementations cannot silently change
+semantics.
 
 ## Decisions
 
@@ -370,9 +371,11 @@ that is not registered is an error; it does not trigger a download.
 
 `run` accepts the three axes, the preset compatibility option, initial-state
 configuration, timestep count, and an optional checksum-verification flag.
-For Phase 1, `--residency streamed` and explicit `cuda` or `webgpu` return a
-clear not-implemented result. `--device auto` resolves to CPU because that is
-the only implemented backend in this phase.
+For Phase 1, `--device cpu --residency streamed` uses the CPU reference
+streamed scheduler. Explicit `cuda` or `webgpu` return a clear not-implemented
+result. `--device auto` resolves to CPU because that is the only implemented
+backend in this phase. Streamed execution on a future accelerator remains
+separate work.
 
 The successful run output includes the resolved configuration, dataset
 identity, number of executed timesteps, spike count, and a digest of the spike
@@ -427,7 +430,7 @@ Phase 1 is complete when all of the following are true:
 3. A malformed artifact and an arithmetic overflow produce typed, actionable
    errors.
 4. The CLI reports resolved device, residency, and scope without claiming
-   unsupported CUDA, WebGPU, or streamed execution.
+   unsupported CUDA or WebGPU execution.
 5. Planning works without importing `torch` or requiring a GPU.
 6. The default test suite passes without network access or downloaded MaleCNS
    files.
