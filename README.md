@@ -16,6 +16,7 @@ Implemented:
 - CPU fixed-point LIF runtime;
 - resident and disk-backed CPU streamed execution;
 - optional resident and streamed CUDA backend with fixed-point tensor execution;
+- optional resident WebGPU backend with canonical WGSL integer kernels;
 - mmap-friendly `.scx` graph artifacts with CSR `.scb` blocks;
 - local MaleCNS Feather adapter with an explicit curated-node filter;
 - deterministic example graph and golden spike train;
@@ -24,15 +25,15 @@ Implemented:
 
 Not implemented:
 
-- WebGPU/WASM execution;
+- WebGPU streamed residency and browser/WASM packaging;
 - automatic MaleCNS downloads or a networked data pipeline;
 - biological or scientific validation of LIF parameters;
 - morphology and EM-volume simulation.
 
-Explicit `webgpu` selection fails with `not implemented`; explicit `cuda`
-selects the optional CUDA backend and reports a typed unavailable error when
-the runtime or host GPU cannot execute it. Neither selection falls back
-silently to CPU. `auto` currently resolves to CPU by design.
+Explicit `cuda` and `webgpu` select their optional backends and report typed
+unavailable errors when the optional runtime or host device cannot execute
+them. Neither selection falls back silently to CPU. `auto` currently resolves
+to CPU by design.
 
 ## Install
 
@@ -40,11 +41,15 @@ silently to CPU. `auto` currently resolves to CPU by design.
 python -m pip install -e ".[dev,data]"
 # Optional CUDA backend:
 python -m pip install -e ".[dev,data,cuda]"
+# Optional WebGPU backend:
+python -m pip install -e ".[dev,data,webgpu]"
 ```
 
 The core package does not depend on PyTorch or another accelerator runtime.
 The CUDA extra uses PyTorch lazily; importing the planner, CPU backend, or graph
-format does not import it.
+format does not import it. The WebGPU extra uses `wgpu` lazily and executes the
+same fixed-point contract through WGSL; browser/WASM packaging is still future
+work.
 
 ## Run the example
 
@@ -52,6 +57,7 @@ format does not import it.
 soup-connectome run --dataset example --device cpu
 soup-connectome run --dataset example --device cpu --residency streamed
 soup-connectome run --dataset example --device cuda --residency streamed
+soup-connectome run --dataset example --device webgpu
 soup-connectome plan --dataset example --device cpu
 soup-connectome benchmark --device auto
 ```
@@ -178,9 +184,9 @@ The local curated conversion is measured at `211,577` neurons,
 `24,678,466` included edges, `1,349,920` excluded edges, and `0` saturated
 weights. Checksum loading and a one-timestep CPU smoke-run passed. These are
 artifact-validation measurements, not accelerator benchmarks or biological
-fidelity results. CUDA parity is `not tested` on the current host because
-minimal CUDA context allocation returned `CUDA_ERROR_OUT_OF_MEMORY` despite the
-driver reporting a visible device.
+fidelity results. CUDA and WebGPU example parity are measured on the current
+host; accelerator throughput and full-scale MaleCNS execution remain `not
+tested`.
 
 ## References
 

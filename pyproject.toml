@@ -21,6 +21,9 @@ data = [
 cuda = [
   "torch>=2,<3",
 ]
+webgpu = [
+  "wgpu>=0.20,<1",
+]
 dev = [
   "pytest>=8,<10",
   "ruff>=0.9,<1",

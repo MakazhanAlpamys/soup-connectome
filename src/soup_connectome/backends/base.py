@@ -19,6 +19,7 @@ class Backend(Protocol):
         *,
         timesteps: int,
         initial_potentials: tuple[int, ...] | None = None,
+        initial_refractory: tuple[int, ...] | None = None,
         residency: Residency | str = Residency.resident,
     ) -> SimulationResult: ...
 
@@ -46,5 +47,10 @@ def resolve_backend(device: Device | str) -> Backend:
             raise BackendUnavailableError(backend.reason)
         return backend
     if selected is Device.webgpu:
-        raise BackendNotImplementedError("webgpu backend is not implemented in Phase 1")
+        from soup_connectome.backends.webgpu import WebGPUBackend
+
+        backend = WebGPUBackend()
+        if not backend.available:
+            raise BackendUnavailableError(backend.reason)
+        return backend
     raise BackendNotImplementedError(f"backend is not implemented: {selected.value}")
