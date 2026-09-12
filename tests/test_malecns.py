@@ -109,6 +109,39 @@ def test_missing_neurotransmitter_mapping_is_explicit(
         )
 
 
+def test_excluded_neurotransmitter_edges_are_reported(
+    malecns_tables: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    weights, annotations, _ = malecns_tables
+    neurotransmitters = tmp_path / "neurotransmitters-with-unclear.feather"
+    _write_feather(
+        neurotransmitters,
+        {
+            "body": [100, 200, 300],
+            "nt": ["unclear", "gaba", "glutamate"],
+        },
+    )
+
+    report = convert_male_cns(
+        weights,
+        annotations,
+        neurotransmitters,
+        tmp_path / "excluded.scx",
+        columns=_columns(),
+        sign_mapping={"gaba": -1, "glutamate": 1},
+        excluded_neurotransmitters=("unclear",),
+        block_size=2,
+        batch_size=1,
+    )
+
+    artifact = load_artifact(tmp_path / "excluded.scx")
+    assert report.n_edges == 1
+    assert report.excluded_edges == 2
+    assert artifact.graph.edge_count == 1
+    assert artifact.manifest.conversion["excluded_neurotransmitters"] == ["unclear"]
+    assert artifact.manifest.conversion["excluded_edges"] == 2
+
+
 def test_quantizer_rejects_or_saturates_int16_overflow() -> None:
     with pytest.raises(QuantizationError):
         WeightQuantizer(numerator=40000).quantize(1)

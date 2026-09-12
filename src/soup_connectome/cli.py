@@ -158,6 +158,11 @@ def convert(
     sign_mapping: str = typer.Option(
         ..., help='JSON mapping, for example `{"acetylcholine": 1, "gaba": -1}`.'
     ),
+    exclude_neurotransmitter: list[str] = typer.Option(
+        [],
+        "--exclude-neurotransmitter",
+        help="Neurotransmitter label whose edges should be omitted; repeatable.",
+    ),
     block_size: int = typer.Option(100000, min=1, help="Source block size; chosen estimate."),
     batch_size: int = typer.Option(65536, min=1, help="Feather scan batch size; chosen estimate."),
     sort_chunk_size: int = typer.Option(
@@ -193,6 +198,7 @@ def convert(
             columns=columns,
             sign_mapping=parsed_sign_mapping,
             block_size=block_size,
+            excluded_neurotransmitters=exclude_neurotransmitter,
             quantizer=WeightQuantizer(
                 numerator=weight_scale_num,
                 denominator=weight_scale_den,
@@ -208,7 +214,8 @@ def convert(
     console.print(
         "measured "
         f"converted={report.artifact_path} neurons={report.n_neurons} "
-        f"edges={report.n_edges} saturated_weights={report.saturated_weights}"
+        f"edges={report.n_edges} excluded_edges={report.excluded_edges} "
+        f"saturated_weights={report.saturated_weights}"
     )
 
 
