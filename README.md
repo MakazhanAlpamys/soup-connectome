@@ -137,11 +137,15 @@ soup-connectome convert \
 ```
 
 Rows are scanned in batches, externally sorted by source, and emitted as source
-blocks. The default delay and chunk sizes are chosen representation estimates,
-not measured biological or performance bounds. Weight overflow rejects the
-conversion by default; `--overflow saturate` records the saturation count in
-the manifest. `--exclude-neurotransmitter` is repeatable, and excluded-edge
-counts are stored in the manifest.
+blocks. Full `raw_endpoints` conversion builds a temporary disk-backed uint64
+ID index instead of keeping the complete external-ID-to-dense-ID mapping in
+RAM; the temporary SQLite file is removed after conversion. This bounds the
+converter's ID-index memory pressure, but the full-scale RAM and runtime impact
+is not tested. The default delay and chunk sizes are chosen representation
+estimates, not measured biological or performance bounds. Weight overflow
+rejects the conversion by default; `--overflow saturate` records the saturation
+count in the manifest. `--exclude-neurotransmitter` is repeatable, and
+excluded-edge counts are stored in the manifest.
 
 For MaleCNS, use the connection weights, body annotations, and
 neurotransmitter files described by the [Janelia download page](https://male-cns.janelia.org/download/).

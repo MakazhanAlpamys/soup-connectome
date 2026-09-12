@@ -261,16 +261,44 @@ def deserialize_block(data: bytes) -> GraphBlock:
 def _serialize_neurons(neurons: tuple[NeuronRecord, ...]) -> bytes:
     encoded = bytearray()
     for index, neuron in enumerate(neurons):
-        encoded.extend(
-            _NEURON_RECORD.pack(
-                index,
-                neuron.external_id,
-                neuron.type_code,
-                neuron.transmitter_code,
-                neuron.side_code,
-            )
-        )
+        encoded.extend(_serialize_neuron(index, neuron))
     return bytes(encoded)
+
+
+def _serialize_neuron(index: int, neuron: NeuronRecord) -> bytes:
+    try:
+        return _NEURON_RECORD.pack(
+            index,
+            neuron.external_id,
+            neuron.type_code,
+            neuron.transmitter_code,
+            neuron.side_code,
+        )
+    except struct.error as exc:
+        raise GraphValidationError("neuron record is outside its binary dtype range") from exc
+
+
+def _write_neurons(
+    path: Path,
+    neurons: Iterable[NeuronRecord],
+    expected_count: int,
+) -> tuple[int, str]:
+    digest = hashlib.sha256()
+    byte_size = 0
+    actual_count = 0
+    with path.open("wb") as stream:
+        for index, neuron in enumerate(neurons):
+            encoded = _serialize_neuron(index, neuron)
+            stream.write(encoded)
+            digest.update(encoded)
+            byte_size += len(encoded)
+            actual_count = index + 1
+    if actual_count != expected_count:
+        raise GraphValidationError(
+            "neuron iterable length does not match neuron count: "
+            f"{actual_count} != {expected_count}"
+        )
+    return byte_size, digest.hexdigest()
 
 
 def _deserialize_neurons(data: bytes, expected_count: int) -> tuple[NeuronRecord, ...]:
@@ -315,7 +343,7 @@ def write_artifact(
 
 def write_artifact_from_blocks(
     n_neurons: int,
-    neurons: tuple[NeuronRecord, ...],
+    neurons: Iterable[NeuronRecord],
     blocks: Iterable[GraphBlock],
     destination: Path,
     *,
@@ -327,8 +355,8 @@ def write_artifact_from_blocks(
 ) -> Path:
     """Write blocks incrementally so a caller need not hold the whole graph."""
 
-    if n_neurons < 0 or len(neurons) != n_neurons:
-        raise GraphValidationError("neuron table length does not match neuron count")
+    if n_neurons < 0 or n_neurons > UINT32_MAX:
+        raise GraphValidationError("neuron count is outside uint32 range")
     destination = Path(destination)
     if destination.exists():
         raise ArtifactExistsError(f"artifact already exists: {destination}")
@@ -336,9 +364,8 @@ def write_artifact_from_blocks(
     blocks_dir = safe_join(destination, "blocks")
     blocks_dir.mkdir(parents=True, exist_ok=False)
 
-    neurons_data = _serialize_neurons(neurons)
     neurons_path = safe_join(destination, "neurons.bin")
-    neurons_path.write_bytes(neurons_data)
+    neurons_byte_size, neurons_sha256 = _write_neurons(neurons_path, neurons, n_neurons)
     descriptors = []
     expected_source = 0
     edge_count = 0
@@ -370,8 +397,8 @@ def write_artifact_from_blocks(
         license=license,
         n_neurons=n_neurons,
         n_edges=edge_count,
-        neurons_byte_size=len(neurons_data),
-        neurons_sha256=_sha256(neurons_data),
+        neurons_byte_size=neurons_byte_size,
+        neurons_sha256=neurons_sha256,
         scope=scope,
         conversion=conversion_metadata or {},
         blocks=tuple(descriptors),

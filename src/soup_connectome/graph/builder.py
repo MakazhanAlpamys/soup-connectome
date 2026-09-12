@@ -97,7 +97,7 @@ def build_artifact_from_rows(
     destination: Path,
     *,
     block_size: int,
-    neurons: tuple[NeuronRecord, ...] | None = None,
+    neurons: Iterable[NeuronRecord] | None = None,
     dataset_id: str = "local",
     source_url: str | None = None,
     license: str | None = None,

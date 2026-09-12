@@ -9,9 +9,11 @@ from soup_connectome.graph.format import (
     load_artifact,
     write_artifact,
 )
+from soup_connectome.graph.id_index import DiskBackedIdIndex
 
 __all__ = [
     "ConnectomeGraph",
+    "DiskBackedIdIndex",
     "Edge",
     "GraphArtifact",
     "GraphBlock",

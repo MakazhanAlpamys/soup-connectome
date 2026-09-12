@@ -16,6 +16,7 @@ from soup_connectome.config import Scope
 from soup_connectome.errors import ArtifactExistsError, DataSchemaError, QuantizationError
 from soup_connectome.graph.builder import build_artifact_from_rows
 from soup_connectome.graph.format import Edge, NeuronRecord
+from soup_connectome.graph.id_index import DiskBackedIdIndex
 
 
 class MaleCNSColumns(BaseModel):
@@ -348,8 +349,8 @@ def _external_endpoint_ids(
     sort_chunk_size: int,
     temporary_parent: Path,
     annotation_ids: set[int],
-) -> set[int]:
-    """Collect only endpoints absent from annotations using bounded temp runs."""
+) -> Iterator[int]:
+    """Yield endpoints absent from annotations using bounded temp runs."""
 
     with tempfile.TemporaryDirectory(
         prefix=".soup-connectome-endpoints-", dir=temporary_parent
@@ -366,7 +367,37 @@ def _external_endpoint_ids(
             excluded_labels=set(),
             write_edge_runs=False,
         )
-        return _merged_endpoint_ids(prepared.endpoint_runs)
+        yield from _merged_endpoint_ids(prepared.endpoint_runs)
+
+
+def _included_endpoint_ids(
+    path: Path,
+    columns: MaleCNSColumns,
+    *,
+    batch_size: int,
+    sort_chunk_size: int,
+    temporary_parent: Path,
+    neurotransmitters: dict[int, str],
+    excluded_labels: set[str],
+) -> Iterator[int]:
+    """Yield endpoints of non-excluded edges using bounded temp runs."""
+
+    with tempfile.TemporaryDirectory(
+        prefix=".soup-connectome-endpoints-", dir=temporary_parent
+    ) as temporary_root:
+        prepared = _prepare_sorted_weight_runs(
+            path,
+            columns,
+            batch_size=batch_size,
+            sort_chunk_size=sort_chunk_size,
+            temporary_directory=Path(temporary_root),
+            include_all_endpoints=False,
+            annotation_ids=set(),
+            neurotransmitters=neurotransmitters,
+            excluded_labels=excluded_labels,
+            write_edge_runs=False,
+        )
+        yield from _merged_endpoint_ids(prepared.endpoint_runs)
 
 
 def _sorted_weight_rows(
@@ -398,14 +429,20 @@ def _merged_weight_rows(runs: Sequence[Path]) -> Iterator[tuple[int, int, int]]:
     yield from heapq.merge(*(_read_edge_run(run) for run in runs))
 
 
-def _merged_endpoint_ids(runs: Sequence[Path]) -> set[int]:
-    unique_ids: set[int] = set()
+def _merged_endpoint_ids(runs: Sequence[Path]) -> Iterator[int]:
     previous: int | None = None
     for endpoint_id in heapq.merge(*(_read_endpoint_run(run) for run in runs)):
         if endpoint_id != previous:
-            unique_ids.add(endpoint_id)
+            yield endpoint_id
             previous = endpoint_id
-    return unique_ids
+
+
+def _merge_sorted_ids(*sources: Iterable[int]) -> Iterator[int]:
+    previous: int | None = None
+    for external_id in heapq.merge(*sources):
+        if external_id != previous:
+            yield external_id
+            previous = external_id
 
 
 def _file_sha256(path: Path) -> str:
@@ -464,8 +501,7 @@ def convert_male_cns(
     overlap = sorted(excluded_labels & normalized_signs.keys())
     if overlap:
         raise DataSchemaError(
-            "a neurotransmitter cannot be both signed and excluded: "
-            + ", ".join(overlap)
+            "a neurotransmitter cannot be both signed and excluded: " + ", ".join(overlap)
         )
     quantizer = quantizer or WeightQuantizer()
     annotations = _load_annotations(annotations_path, columns, batch_size=batch_size)
@@ -473,141 +509,145 @@ def convert_male_cns(
         neurotransmitters_path, columns, batch_size=batch_size
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if node_filter == "annotations":
-        external_ids = set(annotations)
-    elif scope is Scope.full:
-        external_ids = set(annotations) | _external_endpoint_ids(
-            weights_path,
-            columns,
-            batch_size=batch_size,
-            sort_chunk_size=sort_chunk_size,
-            temporary_parent=destination.parent,
-            annotation_ids=set(annotations),
-        )
-    else:
-        endpoint_ids: set[int] = set()
-        for pre_external, post_external, _ in _weight_rows(
-            weights_path, columns, batch_size=batch_size
-        ):
-            neurotransmitter = neurotransmitters.get(pre_external, "unknown")
-            if neurotransmitter in excluded_labels:
-                continue
-            endpoint_ids.update((pre_external, post_external))
-        external_ids = endpoint_ids
-    sorted_external_ids = tuple(sorted(external_ids))
-    dense_by_external = {
-        external_id: index for index, external_id in enumerate(sorted_external_ids)
-    }
-    type_labels = [
-        annotations.get(body_id, ("unknown", "unknown"))[0] for body_id in sorted_external_ids
-    ]
-    side_labels = [
-        annotations.get(body_id, ("unknown", "unknown"))[1] for body_id in sorted_external_ids
-    ]
-    type_codes = _category_codes(type_labels, 2**16 - 1)
-    side_codes = _category_codes(side_labels, 2**7 - 1)
-    neurons = tuple(
-        NeuronRecord(
-            external_id=body_id,
-            type_code=type_codes[annotations.get(body_id, ("unknown", "unknown"))[0]],
-            transmitter_code=(normalized_signs.get(neurotransmitters.get(body_id, "unknown"), 0)),
-            side_code=side_codes[annotations.get(body_id, ("unknown", "unknown"))[1]],
-        )
-        for body_id in sorted_external_ids
-    )
-    saturated_weights = 0
-    edge_count = 0
-    excluded_edges = 0
-
-    def converted_rows(temporary_directory: Path) -> Iterator[tuple[int, Edge]]:
-        nonlocal edge_count, excluded_edges, saturated_weights
-        for pre_external, post_external, raw_weight in _sorted_weight_rows(
-            weights_path,
-            columns,
-            batch_size=batch_size,
-            sort_chunk_size=sort_chunk_size,
-            temporary_directory=temporary_directory,
-            allowed_node_ids=set(annotations) if node_filter == "annotations" else None,
-        ):
-            neurotransmitter = neurotransmitters.get(pre_external, "unknown")
-            if neurotransmitter in excluded_labels:
-                excluded_edges += 1
-                continue
-            if neurotransmitter not in normalized_signs:
-                raise DataSchemaError(
-                    f"sign mapping has no entry for source neurotransmitter: {neurotransmitter}"
-                )
-            try:
-                source_index = dense_by_external[pre_external]
-                target_index = dense_by_external[post_external]
-            except KeyError as exc:
-                raise DataSchemaError(
-                    "included edge endpoint is missing from the annotation table: "
-                    f"{exc.args[0]}"
-                ) from exc
-            signed_weight = raw_weight * normalized_signs[neurotransmitter]
-            quantized_weight, saturated = quantizer.quantize_with_status(signed_weight)
-            edge_count += 1
-            saturated_weights += int(saturated)
-            yield (
-                source_index,
-                Edge(
-                    target=target_index,
-                    weight=quantized_weight,
-                    delay=delay_steps,
-                ),
-            )
-
     with tempfile.TemporaryDirectory(
         prefix=".soup-connectome-convert-", dir=destination.parent
     ) as temporary_root:
         temporary_root_path = Path(temporary_root)
         staging = temporary_root_path / "artifact.scx"
-        conversion_metadata = {
-            "adapter": "male-cns",
-            "weights_sha256": _file_sha256(weights_path),
-            "annotations_sha256": _file_sha256(annotations_path),
-            "neurotransmitters_sha256": _file_sha256(neurotransmitters_path),
-            "columns": columns.model_dump(mode="json"),
-            "sign_mapping": normalized_signs,
-            "excluded_neurotransmitters": sorted(excluded_labels),
-            "node_filter": node_filter,
-            "quantizer": quantizer.model_dump(mode="json"),
-            "delay_steps": delay_steps,
-            "scope_rule": (
-                "all annotation IDs plus raw endpoints for full; "
-                "endpoints of included edges for compact"
-            ),
-            "type_category_codes": type_codes,
-            "side_category_codes": side_codes,
-            "excluded_edges": 0,
-            "saturated_weights": 0,
-        }
-        build_artifact_from_rows(
-            len(sorted_external_ids),
-            converted_rows(temporary_root_path),
-            staging,
-            block_size=block_size,
-            neurons=neurons,
-            dataset_id="male-cns:v1.0",
-            source_url="https://male-cns.janelia.org/download/",
-            license="CC-BY",
-            scope=scope,
-            conversion_metadata=conversion_metadata,
+        if node_filter == "annotations":
+            external_ids = iter(sorted(annotations))
+        elif scope is Scope.full:
+            endpoint_ids = _external_endpoint_ids(
+                weights_path,
+                columns,
+                batch_size=batch_size,
+                sort_chunk_size=sort_chunk_size,
+                temporary_parent=temporary_root_path,
+                annotation_ids=set(annotations),
+            )
+            external_ids = _merge_sorted_ids(iter(sorted(annotations)), endpoint_ids)
+        else:
+            endpoint_ids = _included_endpoint_ids(
+                weights_path,
+                columns,
+                batch_size=batch_size,
+                sort_chunk_size=sort_chunk_size,
+                temporary_parent=temporary_root_path,
+                neurotransmitters=neurotransmitters,
+                excluded_labels=excluded_labels,
+            )
+            external_ids = endpoint_ids
+
+        node_index = DiskBackedIdIndex.from_sorted_unique(
+            temporary_root_path / "node-index.sqlite3", external_ids
         )
-        conversion_metadata["saturated_weights"] = saturated_weights
-        final_manifest = staging / "manifest.json"
-        manifest_text = final_manifest.read_text(encoding="utf-8")
-        manifest = json.loads(manifest_text)
-        manifest["conversion"]["excluded_edges"] = excluded_edges
-        manifest["conversion"]["saturated_weights"] = saturated_weights
-        final_manifest.write_text(
-            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        staging.replace(destination)
+        try:
+            n_neurons = node_index.count
+            type_codes = _category_codes((record[0] for record in annotations.values()), 2**16 - 1)
+            side_codes = _category_codes((record[1] for record in annotations.values()), 2**7 - 1)
+            allowed_node_ids = set(annotations) if node_filter == "annotations" else None
+            saturated_weights = 0
+            edge_count = 0
+            excluded_edges = 0
+
+            def converted_rows(temporary_directory: Path) -> Iterator[tuple[int, Edge]]:
+                nonlocal edge_count, excluded_edges, saturated_weights
+                for pre_external, post_external, raw_weight in _sorted_weight_rows(
+                    weights_path,
+                    columns,
+                    batch_size=batch_size,
+                    sort_chunk_size=sort_chunk_size,
+                    temporary_directory=temporary_directory,
+                    allowed_node_ids=allowed_node_ids,
+                ):
+                    neurotransmitter = neurotransmitters.get(pre_external, "unknown")
+                    if neurotransmitter in excluded_labels:
+                        excluded_edges += 1
+                        continue
+                    if neurotransmitter not in normalized_signs:
+                        raise DataSchemaError(
+                            "sign mapping has no entry for source neurotransmitter: "
+                            f"{neurotransmitter}"
+                        )
+                    try:
+                        source_index = node_index.lookup(pre_external)
+                        target_index = node_index.lookup(post_external)
+                    except KeyError as exc:
+                        raise DataSchemaError(
+                            f"included edge endpoint is missing from the node index: {exc.args[0]}"
+                        ) from exc
+                    signed_weight = raw_weight * normalized_signs[neurotransmitter]
+                    quantized_weight, saturated = quantizer.quantize_with_status(signed_weight)
+                    edge_count += 1
+                    saturated_weights += int(saturated)
+                    yield (
+                        source_index,
+                        Edge(
+                            target=target_index,
+                            weight=quantized_weight,
+                            delay=delay_steps,
+                        ),
+                    )
+
+            neurons = (
+                NeuronRecord(
+                    external_id=external_id,
+                    type_code=type_codes[annotations.get(external_id, ("unknown", "unknown"))[0]],
+                    transmitter_code=normalized_signs.get(
+                        neurotransmitters.get(external_id, "unknown"), 0
+                    ),
+                    side_code=side_codes[annotations.get(external_id, ("unknown", "unknown"))[1]],
+                )
+                for _dense_index, external_id in node_index.iter_dense()
+            )
+            conversion_metadata = {
+                "adapter": "male-cns",
+                "weights_sha256": _file_sha256(weights_path),
+                "annotations_sha256": _file_sha256(annotations_path),
+                "neurotransmitters_sha256": _file_sha256(neurotransmitters_path),
+                "columns": columns.model_dump(mode="json"),
+                "sign_mapping": normalized_signs,
+                "excluded_neurotransmitters": sorted(excluded_labels),
+                "node_filter": node_filter,
+                "quantizer": quantizer.model_dump(mode="json"),
+                "delay_steps": delay_steps,
+                "scope_rule": (
+                    "all annotation IDs plus raw endpoints for full; "
+                    "endpoints of included edges for compact"
+                ),
+                "node_index": "temporary sqlite rowid dense index",
+                "type_category_codes": type_codes,
+                "side_category_codes": side_codes,
+                "excluded_edges": 0,
+                "saturated_weights": 0,
+            }
+            build_artifact_from_rows(
+                n_neurons,
+                converted_rows(temporary_root_path),
+                staging,
+                block_size=block_size,
+                neurons=neurons,
+                dataset_id="male-cns:v1.0",
+                source_url="https://male-cns.janelia.org/download/",
+                license="CC-BY",
+                scope=scope,
+                conversion_metadata=conversion_metadata,
+            )
+            conversion_metadata["saturated_weights"] = saturated_weights
+            final_manifest = staging / "manifest.json"
+            manifest_text = final_manifest.read_text(encoding="utf-8")
+            manifest = json.loads(manifest_text)
+            manifest["conversion"]["excluded_edges"] = excluded_edges
+            manifest["conversion"]["saturated_weights"] = saturated_weights
+            final_manifest.write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            staging.replace(destination)
+        finally:
+            node_index.close()
     return ConversionReport(
         artifact_path=destination,
-        n_neurons=len(sorted_external_ids),
+        n_neurons=n_neurons,
         n_edges=edge_count,
         excluded_edges=excluded_edges,
         saturated_weights=saturated_weights,
