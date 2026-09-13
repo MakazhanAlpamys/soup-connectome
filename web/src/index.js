@@ -265,7 +265,7 @@ export async function openArtifact(baseUrl, { fetchImpl = globalThis.fetch, veri
     ) {
       throw new Error(`block descriptor does not match file: ${descriptor.filename}`);
     }
-    return block;
+    return { ...block, bytes };
   }
 
   return {
@@ -523,4 +523,52 @@ export async function runStreamed({ device, artifact, config, timesteps, initial
   [potentialBuffer, refractoryBuffer, spikeBuffer, arrivalBuffer, configBuffer, errorBuffer,
     dummyEdge, dummyWeight, dummyConfig].forEach((buffer) => buffer.destroy());
   return { spikes, finalPotentials, finalRefractory };
+}
+
+export async function runWasmStreamed({
+  Runtime,
+  artifact,
+  config,
+  timesteps,
+  initialPotentials,
+  initialRefractory,
+}) {
+  if (typeof Runtime !== "function") throw new Error("a wasm Runtime constructor is required");
+  if (!artifact?.manifest || typeof artifact.iterBlocks !== "function") {
+    throw new Error("a loaded connectome artifact is required");
+  }
+  requireInteger(timesteps, "timesteps", 0, Number.MAX_SAFE_INTEGER);
+  validateConfig(config);
+  const nNeurons = artifact.manifest.n_neurons;
+  const maxDelay = await artifact.maxDelay();
+  requireInteger(maxDelay, "maximum delay", 0, UINT16_MAX);
+  const potentials = initialPotentials === undefined
+    ? new Int32Array(nNeurons)
+    : Int32Array.from(initialPotentials);
+  const refractory = initialRefractory === undefined
+    ? new Uint32Array(nNeurons)
+    : Uint32Array.from(initialRefractory);
+  if (potentials.length !== nNeurons || refractory.length !== nNeurons) {
+    throw new Error("initial state length does not match graph");
+  }
+  const runtime = new Runtime(
+    nNeurons,
+    maxDelay,
+    config.threshold,
+    config.reset,
+    Uint32Array.from(config.decay_shifts),
+    config.refractory_steps,
+  );
+  runtime.set_initial_state(potentials, refractory);
+  const spikes = [];
+  for (let timestep = 0; timestep < timesteps; timestep += 1) {
+    spikes.push([...runtime.begin_step()].map((value) => value !== 0));
+    for await (const block of artifact.iterBlocks()) runtime.schedule_block(block.bytes);
+    runtime.finish_step();
+  }
+  return {
+    spikes,
+    finalPotentials: [...runtime.final_potentials()],
+    finalRefractory: [...runtime.final_refractory()],
+  };
 }

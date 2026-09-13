@@ -26,6 +26,11 @@ const result = await runStreamed({
 });
 ```
 
+The same artifact can use the optional WASM CPU runtime. After loading the
+`wasm-pack --target web` package and calling its default initializer, pass its
+`ConnectomeRuntime` constructor to `runWasmStreamed`; the host sends each raw
+block directly to WASM and retains no complete graph copy in JavaScript.
+
 `npm test` runs parser and shader-contract tests in Node. The optional
 `web/wasm` crate provides a small wasm-bindgen validation boundary; build it
 with `wasm-pack build --target web --out-dir pkg --release` from that directory.

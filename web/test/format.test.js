@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { WGSL_LIF_SHADER, parseBlock, parseManifest } from "../src/index.js";
+import {
+  WGSL_LIF_SHADER,
+  parseBlock,
+  parseManifest,
+  runWasmStreamed,
+} from "../src/index.js";
 
 function exampleBlock() {
   const bytes = new ArrayBuffer(20 + 3 * 4 + 2 * 4 + 2 * 2 + 2 * 2);
@@ -51,4 +56,31 @@ test("rejects a manifest edge-count mismatch", () => {
 test("WGSL stays on integer atomics", () => {
   assert.match(WGSL_LIF_SHADER, /atomicCompareExchangeWeak/);
   assert.doesNotMatch(WGSL_LIF_SHADER, /i64|f32/);
+});
+
+test("streams raw blocks through the WASM runtime boundary", async () => {
+  const calls = [];
+  class FakeRuntime {
+    constructor(...args) { calls.push(["new", args]); }
+    set_initial_state() { calls.push(["initial"]); }
+    begin_step() { calls.push(["begin"]); return Uint8Array.from([1, 0]); }
+    schedule_block(bytes) { calls.push(["block", [...bytes]]); }
+    finish_step() { calls.push(["finish"]); }
+    final_potentials() { return Int32Array.from([0, 0]); }
+    final_refractory() { return Uint32Array.from([0, 0]); }
+  }
+  const artifact = {
+    manifest: { n_neurons: 2 },
+    maxDelay: async () => 1,
+    async *iterBlocks() { yield { bytes: Uint8Array.from([7, 8]) }; },
+  };
+  const result = await runWasmStreamed({
+    Runtime: FakeRuntime,
+    artifact,
+    config: { threshold: 4, reset: 0, decay_shifts: [1], refractory_steps: 0 },
+    timesteps: 1,
+  });
+  assert.deepEqual(result.spikes, [[true, false]]);
+  assert.deepEqual(calls.map(([name]) => name), ["new", "initial", "begin", "block", "finish"]);
+  assert.deepEqual(calls[3][1], [7, 8]);
 });
