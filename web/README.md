@@ -5,6 +5,16 @@ execution of `.scx` artifacts. It uses the same fixed-point WGSL kernels as the
 Python WebGPU backend and keeps neuron state plus the delay line resident on the
 `GPUDevice`; one validated source block is fetched and uploaded at a time.
 
+## Validation result
+
+The browser WebGPU ↔ WASM parity fixture passes in installed Chrome
+`153.0.8010.37` with an Intel Gen-12LP adapter. The test compares delayed spike
+trains and final state, not biological fidelity.
+
+![Browser WebGPU and WASM parity result](../docs/assets/browser-e2e-chrome.png)
+
+*Measured browser E2E result from the local Windows host.*
+
 The host is intentionally a low-level runtime boundary, not a demo UI. A page
 can use it like this:
 

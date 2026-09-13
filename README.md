@@ -18,7 +18,6 @@ biological validation.
 | CPU resident + streamed runtime | `measured` | Full test suite and MaleCNS smoke |
 | CUDA resident + streamed backend | implemented | Optional; full-scale CUDA performance `not tested` |
 | Python WebGPU resident + streamed backend | `measured` | Example parity and MaleCNS smoke |
-| Browser WebGPU host | `measured` | Fixture passes in installed Chrome `153.0.8010.37` |
 | WASM CPU streaming runtime | `measured` | Generated web/node bindings and parity fixture |
 | MaleCNS `.scx` artifact | `measured` | `211,577` neurons, `24,678,466` edges |
 | Biological/scientific validation | `not tested` | LIF parameters are runtime configuration |
@@ -34,15 +33,10 @@ The local curated MaleCNS artifact contains `211,577` neurons and
 | Full-scale, one timestep, zero initial spikes, Python WebGPU | `2.695649 s`, `0` spikes — `measured` |
 | Full-scale, two-timestep active synthetic stress, CPU | `130.364592 s`, spike counts `[1, 319]` — `measured` |
 | Same active synthetic stress, Python WebGPU | `128.487143 s`, spike counts `[1, 319]` — `measured` |
-| Browser WebGPU ↔ WASM parity fixture in installed Chrome | `PASS` — `measured` |
 
 The active stress configuration uses `threshold=1`, `reset=0`,
 `decay_shifts=[31]`, and `refractory_steps=0`; it is a propagation test, not
 a biological calibration or representative throughput benchmark.
-
-![Browser WebGPU and WASM parity result](docs/assets/browser-e2e-chrome.png)
-
-*Measured browser E2E result from installed Chrome on the local Windows host.*
 
 ## Why this runtime
 
@@ -95,38 +89,6 @@ soup-connectome plan --dataset example --device cpu
 
 Explicit `cuda` and `webgpu` never silently fall back to CPU. `auto` resolves
 to CPU by design.
-
-## Browser E2E
-
-The browser host is a low-level runtime boundary, not a demo UI. Build the
-WASM package and serve `web/` locally:
-
-```bash
-cd web/wasm
-wasm-pack build --target web --out-dir pkg --release
-python -m http.server 8765 --directory ..
-```
-
-For the optional Playwright check:
-
-```bash
-cd web
-npm install
-npx playwright install chromium
-npm run test:e2e
-```
-
-To test a real installed browser explicitly on Windows:
-
-```powershell
-$env:SOUP_CONNECTOME_E2E_EXECUTABLE = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-npm run test:e2e:chrome
-```
-
-The default test fails on a runtime mismatch and skips only when bundled
-Chromium cannot provide a WebGPU adapter. `test:e2e:chrome` requires the
-explicitly selected installed browser and fails unless the WebGPU/WASM fixture
-passes.
 
 ## MaleCNS data workflow
 
