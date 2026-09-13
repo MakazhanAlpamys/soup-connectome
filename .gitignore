@@ -5,3 +5,5 @@ __pycache__/
 .ruff_cache/
 data/
 artifacts/
+web/wasm/target/
+web/wasm/pkg/

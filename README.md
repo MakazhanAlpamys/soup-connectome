@@ -18,6 +18,7 @@ Implemented:
 - optional resident and streamed CUDA backend with fixed-point tensor execution;
 - optional resident and streamed WebGPU backend with canonical WGSL integer kernels;
 - dependency-free browser WebGPU host for streamed `.scx` artifacts;
+- optional wasm-bindgen validation boundary for browser packaging;
 - mmap-friendly `.scx` graph artifacts with CSR `.scb` blocks;
 - local MaleCNS Feather adapter with an explicit curated-node filter;
 - deterministic example graph and golden spike train;
@@ -26,7 +27,7 @@ Implemented:
 
 Not implemented:
 
-- WASM packaging;
+- complete CPU connectome runtime compiled to WASM;
 - automatic MaleCNS downloads or a networked data pipeline;
 - biological or scientific validation of LIF parameters;
 - morphology and EM-volume simulation.
@@ -51,8 +52,9 @@ The CUDA extra uses PyTorch lazily; importing the planner, CPU backend, or graph
 format does not import it. The WebGPU extra uses `wgpu` lazily and executes the
 same fixed-point contract through WGSL. The browser host lives in `web/` and
 has no npm runtime dependencies; run its parser and shader-contract checks with
-`npm test` from that directory. Browser compatibility, browser GPU execution,
-and WASM packaging are `not tested`.
+`npm test` from that directory. The optional `web/wasm` crate is built with
+`wasm-pack --target web`; browser compatibility, browser GPU execution, and
+throughput are `not tested`.
 
 ## Run the example
 

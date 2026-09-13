@@ -26,6 +26,9 @@ const result = await runStreamed({
 });
 ```
 
-`npm test` runs parser and shader-contract tests in Node. Browser GPU execution
-requires a browser with WebGPU enabled and is not exercised by the Node suite;
-throughput, browser compatibility, and WASM packaging are `not tested`.
+`npm test` runs parser and shader-contract tests in Node. The optional
+`web/wasm` crate provides a small wasm-bindgen validation boundary; build it
+with `wasm-pack build --target web --out-dir pkg --release` from that directory.
+Browser GPU execution requires a browser with WebGPU enabled and is not
+exercised by the Node suite; throughput and browser compatibility are `not
+tested`.
