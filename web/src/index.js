@@ -380,6 +380,9 @@ async function readBuffer(device, source, size, constants) {
   const encoder = device.createCommandEncoder();
   encoder.copyBufferToBuffer(source, 0, staging, 0, size);
   device.queue.submit([encoder.finish()]);
+  if (typeof device.queue.onSubmittedWorkDone === "function") {
+    await device.queue.onSubmittedWorkDone();
+  }
   await staging.mapAsync(constants.mapMode.READ);
   const result = new Uint8Array(staging.getMappedRange(0, size)).slice();
   staging.unmap();

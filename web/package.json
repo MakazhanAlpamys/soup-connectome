@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "test:e2e": "playwright test e2e/browser.spec.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
   }
 }

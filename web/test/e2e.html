@@ -1,0 +1,101 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>soup-connectome browser E2E</title>
+<body>
+<h1>soup-connectome browser E2E</h1>
+<pre id="result">running…</pre>
+<script type="module">
+  import initWasm, { ConnectomeRuntime } from "../wasm/pkg/soup_connectome_wasm.js";
+  import {
+    parseBlock,
+    requestWebGPUDevice,
+    runStreamed,
+    runWasmStreamed,
+  } from "../src/index.js";
+
+  const output = document.querySelector("#result");
+
+  function makeBlockBytes() {
+    const bytes = new ArrayBuffer(20 + 3 * 4 + 4 + 2 + 2);
+    const view = new DataView(bytes);
+    new Uint8Array(bytes, 0, 4).set([0x53, 0x43, 0x42, 0x31]);
+    view.setUint32(4, 1, true);
+    view.setUint32(8, 0, true);
+    view.setUint32(12, 2, true);
+    view.setUint32(16, 1, true);
+    let offset = 20;
+    for (const value of [0, 1, 1]) {
+      view.setUint32(offset, value, true);
+      offset += 4;
+    }
+    view.setUint32(offset, 1, true);
+    offset += 4;
+    view.setInt16(offset, 8, true);
+    offset += 2;
+    view.setUint16(offset, 1, true);
+    return new Uint8Array(bytes);
+  }
+
+  function fixtureArtifact() {
+    const bytes = makeBlockBytes();
+    const block = parseBlock(bytes, { nNeurons: 2 });
+    return {
+      manifest: { n_neurons: 2 },
+      maxDelay: async () => 1,
+      async *iterBlocks() {
+        yield { ...block, bytes };
+      },
+    };
+  }
+
+  const config = {
+    threshold: 4,
+    reset: 0,
+    decay_shifts: [1],
+    refractory_steps: 0,
+  };
+  const initialPotentials = [10, 0];
+  const initialRefractory = [0, 0];
+  const expected = {
+    spikes: [[true, false], [false, true]],
+    finalPotentials: [0, 0],
+    finalRefractory: [0, 0],
+  };
+
+  function same(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
+  try {
+    const artifact = fixtureArtifact();
+    const device = await requestWebGPUDevice();
+    const webgpu = await runStreamed({
+      device,
+      artifact,
+      config,
+      timesteps: 2,
+      initialPotentials,
+      initialRefractory,
+    });
+    await initWasm();
+    const wasm = await runWasmStreamed({
+      Runtime: ConnectomeRuntime,
+      artifact: fixtureArtifact(),
+      config,
+      timesteps: 2,
+      initialPotentials,
+      initialRefractory,
+    });
+    const passed = same(webgpu, expected) && same(wasm, expected) && same(webgpu, wasm);
+    output.textContent = JSON.stringify({
+      status: passed ? "PASS" : "FAIL",
+      expected,
+      webgpu,
+      wasm,
+    }, null, 2);
+    document.title = passed ? "PASS soup-connectome browser E2E" : "FAIL soup-connectome browser E2E";
+  } catch (error) {
+    output.textContent = JSON.stringify({ status: "ERROR", error: String(error) }, null, 2);
+    document.title = "ERROR soup-connectome browser E2E";
+  }
+</script>

@@ -51,10 +51,9 @@ The core package does not depend on PyTorch or another accelerator runtime.
 The CUDA extra uses PyTorch lazily; importing the planner, CPU backend, or graph
 format does not import it. The WebGPU extra uses `wgpu` lazily and executes the
 same fixed-point contract through WGSL. The browser host lives in `web/` and
-has no npm runtime dependencies; run its parser and shader-contract checks with
-`npm test` from that directory. The optional `web/wasm` crate includes the CPU
-streaming runtime and is built with `wasm-pack --target web`; browser
-compatibility, browser GPU execution, and throughput are `not tested`.
+has no npm runtime dependencies; run its parser, shader-contract, and optional
+browser E2E checks from that directory. The optional `web/wasm` crate includes
+the CPU streaming runtime and is built with `wasm-pack --target web`.
 
 ## Run the example
 
@@ -189,11 +188,15 @@ Quantitative claims are tagged in code and documentation:
 
 The local curated conversion is measured at `211,577` neurons,
 `24,678,466` included edges, `1,349,920` excluded edges, and `0` saturated
-weights. Checksum loading and a one-timestep CPU smoke-run passed. These are
-artifact-validation measurements, not accelerator benchmarks or biological
-fidelity results. CUDA and Python WebGPU example parity are measured on the
-current host; browser compatibility, accelerator throughput, and full-scale
-MaleCNS execution remain `not tested`.
+weights. Checksum loading and a one-timestep CPU smoke-run passed. A full-scale
+one-timestep zero-spike smoke on that exact artifact is measured at
+`2.245442` seconds on CPU and `2.695649` seconds on Python WebGPU, with
+`spikes=0` in both runs. These are artifact-validation and loader/runtime
+measurements, not biological fidelity results or active-edge throughput
+benchmarks. CUDA and Python WebGPU example parity are measured on the current
+host. Browser GPU execution is `not tested` here because the available
+Chromium environment has no usable WebGPU adapter; active-edge multi-timestep
+full-scale throughput and biological validation remain `not tested`.
 
 ## References
 
