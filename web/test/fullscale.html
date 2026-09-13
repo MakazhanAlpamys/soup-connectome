@@ -1,0 +1,66 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>soup-connectome full-scale browser smoke</title>
+<style>
+  :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+  body { margin: 0; min-height: 100vh; background: #0b1020; color: #e8eefc; }
+  main { width: min(960px, calc(100% - 48px)); margin: 0 auto; padding: 64px 0; }
+  .eyebrow { color: #8da2d6; font-size: 12px; letter-spacing: .16em; text-transform: uppercase; }
+  h1 { margin: 12px 0 8px; font-size: clamp(32px, 6vw, 58px); letter-spacing: -.04em; }
+  .lede { max-width: 680px; color: #aebbd8; font-size: 18px; line-height: 1.55; }
+  .panel { margin-top: 36px; padding: 24px; border: 1px solid #2b3960; border-radius: 18px; background: #111a31; box-shadow: 0 24px 80px #05081288; }
+  .panel-label { margin: 0 0 14px; color: #7d91c5; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
+  pre { margin: 0; overflow: auto; color: #cfe0ff; font: 14px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; }
+</style>
+<body>
+<main>
+  <p class="eyebrow">validation / full-scale artifact</p>
+  <h1>soup-connectome</h1>
+  <p class="lede">Loading the complete local MaleCNS artifact and executing one streamed WebGPU timestep with the standard runtime configuration.</p>
+  <section class="panel">
+    <p class="panel-label">runtime result</p>
+    <pre id="result">running…</pre>
+  </section>
+</main>
+<script type="module">
+  import { openArtifact, requestWebGPUDevice, runStreamed } from "../src/index.js";
+
+  const output = document.querySelector("#result");
+  const config = {
+    threshold: 20000,
+    reset: 0,
+    decay_shifts: [2],
+    refractory_steps: 2,
+  };
+
+  try {
+    const artifact = await openArtifact("../../artifacts/male-cns-v1.0-annotated.scx/");
+    const device = await requestWebGPUDevice();
+    const started = performance.now();
+    const result = await runStreamed({ device, artifact, config, timesteps: 1 });
+    const wallSeconds = (performance.now() - started) / 1000;
+    const spikeCounts = result.spikes.map((step) => step.reduce((count, value) => count + (value ? 1 : 0), 0));
+    const finalPotentialNonzero = result.finalPotentials.reduce((count, value) => count + (value !== 0 ? 1 : 0), 0);
+    const finalRefractoryNonzero = result.finalRefractory.reduce((count, value) => count + (value !== 0 ? 1 : 0), 0);
+    const passed = spikeCounts.every((count) => count === 0) && finalPotentialNonzero === 0 && finalRefractoryNonzero === 0;
+    output.textContent = JSON.stringify({
+      status: passed ? "PASS" : "FAIL",
+      evidence: "measured",
+      device: "browser WebGPU",
+      residency: "streamed",
+      timesteps: 1,
+      nNeurons: artifact.manifest.n_neurons,
+      nEdges: artifact.manifest.n_edges,
+      blocks: artifact.manifest.blocks.length,
+      wallSeconds,
+      spikeCounts,
+      finalPotentialNonzero,
+      finalRefractoryNonzero,
+      config,
+    }, null, 2);
+    document.title = passed ? "PASS soup-connectome full-scale browser smoke" : "FAIL soup-connectome full-scale browser smoke";
+  } catch (error) {
+    output.textContent = JSON.stringify({ status: "ERROR", error: String(error) }, null, 2);
+    document.title = "ERROR soup-connectome full-scale browser smoke";
+  }
+</script>

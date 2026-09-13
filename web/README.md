@@ -15,6 +15,31 @@ trains and final state, not biological fidelity.
 
 *Measured browser E2E result from the local Windows host.*
 
+## Full-scale MaleCNS smoke
+
+The full-scale browser smoke loads the local `.scx` artifact rather than the
+small parity fixture. Serve the repository root so the page can fetch
+`artifacts/`:
+
+From the repository root:
+
+```powershell
+python -m http.server 8765 --directory .
+```
+
+In another shell, run it with an installed browser:
+
+```powershell
+cd web
+$env:SOUP_CONNECTOME_E2E_EXECUTABLE = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+npm run test:e2e:chrome:fullscale
+```
+
+The current host measured `PASS` for `211,577` neurons, `24,678,466` edges,
+three streamed blocks, one timestep, and `0` spikes in `2.8955 s`. The timing
+covers the streamed runtime after artifact and device setup; it is not a
+biological performance claim.
+
 The host is intentionally a low-level runtime boundary, not a demo UI. A page
 can use it like this:
 
