@@ -1,11 +1,33 @@
 # soup-connectome
 
-> Portable runtime for executing sparse biological connectomes across CPU, CUDA, WebGPU, and WASM.
+<p align="center">
+  <a href="https://github.com/MakazhanAlpamys/Soup">
+    <img src="docs/assets/soup-logo.svg" alt="Soup logo" width="96" />
+  </a>
+</p>
+
+<p align="center">
+  <strong>Inspired by <a href="https://github.com/MakazhanAlpamys/Soup">Soup</a></strong><br />
+  Portable runtime for executing sparse biological connectomes across CPU, CUDA, WebGPU, and WASM.
+</p>
+
+<p align="center">
+  <a href="https://github.com/MakazhanAlpamys/soup-connectome/tree/v0.1.0">v0.1.0</a>
+  ·
+  <a href="https://male-cns.janelia.org/">MaleCNS</a>
+  ·
+  <a href="web/README.md">Browser runtime</a>
+</p>
 
 `soup-connectome` turns a sparse connectome into a portable `.scx` artifact and
 executes it with deterministic fixed-point LIF semantics. The first dataset
 target is [MaleCNS](https://male-cns.janelia.org/), the male fruit-fly
 connectome released by Janelia.
+
+> **Built with ideas from Soup.** This is an independent infrastructure
+> experiment that carries Soup's streamed sparse-graph approach into a real
+> biological connectome runtime. Soup is the architectural inspiration, not a
+> bundled runtime dependency or a claim of official endorsement.
 
 This is infrastructure, not a game demo: the project focuses on graph storage,
 streaming, backend parity, and explicit device planning. It does not claim
