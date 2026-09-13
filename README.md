@@ -17,6 +17,7 @@ Implemented:
 - resident and disk-backed CPU streamed execution;
 - optional resident and streamed CUDA backend with fixed-point tensor execution;
 - optional resident and streamed WebGPU backend with canonical WGSL integer kernels;
+- dependency-free browser WebGPU host for streamed `.scx` artifacts;
 - mmap-friendly `.scx` graph artifacts with CSR `.scb` blocks;
 - local MaleCNS Feather adapter with an explicit curated-node filter;
 - deterministic example graph and golden spike train;
@@ -25,7 +26,7 @@ Implemented:
 
 Not implemented:
 
-- browser/WASM packaging;
+- WASM packaging;
 - automatic MaleCNS downloads or a networked data pipeline;
 - biological or scientific validation of LIF parameters;
 - morphology and EM-volume simulation.
@@ -48,8 +49,10 @@ python -m pip install -e ".[dev,data,webgpu]"
 The core package does not depend on PyTorch or another accelerator runtime.
 The CUDA extra uses PyTorch lazily; importing the planner, CPU backend, or graph
 format does not import it. The WebGPU extra uses `wgpu` lazily and executes the
-same fixed-point contract through WGSL; browser/WASM packaging is still future
-work.
+same fixed-point contract through WGSL. The browser host lives in `web/` and
+has no npm runtime dependencies; run its parser and shader-contract checks with
+`npm test` from that directory. Browser compatibility, browser GPU execution,
+and WASM packaging are `not tested`.
 
 ## Run the example
 
@@ -186,9 +189,9 @@ The local curated conversion is measured at `211,577` neurons,
 `24,678,466` included edges, `1,349,920` excluded edges, and `0` saturated
 weights. Checksum loading and a one-timestep CPU smoke-run passed. These are
 artifact-validation measurements, not accelerator benchmarks or biological
-fidelity results. CUDA and WebGPU example parity are measured on the current
-host; accelerator throughput and full-scale MaleCNS execution remain `not
-tested`.
+fidelity results. CUDA and Python WebGPU example parity are measured on the
+current host; browser compatibility, accelerator throughput, and full-scale
+MaleCNS execution remain `not tested`.
 
 ## References
 
