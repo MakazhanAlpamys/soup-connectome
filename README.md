@@ -44,10 +44,31 @@ biological validation.
 | MaleCNS `.scx` artifact | `measured` | `211,577` neurons, `24,678,466` edges |
 | Biological/scientific validation | `not tested` | LIF parameters are runtime configuration |
 
-## Validation snapshot
+## Full-scale benchmark
 
-The local curated MaleCNS artifact contains `211,577` neurons and
-`24,678,466` included edges across three streamed CSR blocks.
+> **measured on the local host** · `211,577` neurons · `24,678,466` edges ·
+> three streamed CSR blocks
+
+The reproducible standard run uses `threshold=20000`, `reset=0`,
+`decay_shifts=[2]`, `refractory_steps=2`, `--timesteps 4`, `--seed-neuron 0`,
+and `--seed-potential 30000`.
+
+| Backend | Residency | Timesteps | Wall time | Spike counts |
+| --- | --- | --- | --- | --- |
+| CPU | streamed | 4 | `221.537098 s` — `measured` | `[1, 0, 0, 0]` |
+| Python WebGPU | streamed | 4 | `266.778847 s` — `measured` | `[1, 0, 0, 0]` |
+
+```bash
+python scripts/benchmark_malecns.py --device cpu --residency streamed --timesteps 4
+python scripts/benchmark_malecns.py --device webgpu --residency streamed --timesteps 4
+```
+
+These numbers are reproducibility evidence for the runtime, not a throughput
+claim or biological calibration. Additional one-timestep smoke and synthetic
+propagation results are recorded below.
+
+<details>
+<summary>Additional validation runs</summary>
 
 | Run | Result |
 | --- | --- |
@@ -55,21 +76,12 @@ The local curated MaleCNS artifact contains `211,577` neurons and
 | Full-scale, one timestep, zero initial spikes, Python WebGPU | `2.695649 s`, `0` spikes — `measured` |
 | Full-scale, two-timestep active synthetic stress, CPU | `130.364592 s`, spike counts `[1, 319]` — `measured` |
 | Same active synthetic stress, Python WebGPU | `128.487143 s`, spike counts `[1, 319]` — `measured` |
-| Standard config, four timesteps, seeded source, CPU | `221.537098 s`, spike counts `[1, 0, 0, 0]` — `measured` |
-| Same standard benchmark, Python WebGPU | `266.778847 s`, spike counts `[1, 0, 0, 0]` — `measured` |
 
 The active stress configuration uses `threshold=1`, `reset=0`,
 `decay_shifts=[31]`, and `refractory_steps=0`; it is a propagation test, not
 a biological calibration or representative throughput benchmark.
 
-The reproducible standard benchmark uses `scripts/benchmark_malecns.py` with
-`threshold=20000`, `reset=0`, `decay_shifts=[2]`, `refractory_steps=2`,
-`--timesteps 4`, `--seed-neuron 0`, and `--seed-potential 30000`.
-
-```bash
-python scripts/benchmark_malecns.py --device cpu --residency streamed --timesteps 4
-python scripts/benchmark_malecns.py --device webgpu --residency streamed --timesteps 4
-```
+</details>
 
 ## Why this runtime
 
