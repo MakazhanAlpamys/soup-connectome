@@ -194,9 +194,16 @@ one-timestep zero-spike smoke on that exact artifact is measured at
 `spikes=0` in both runs. These are artifact-validation and loader/runtime
 measurements, not biological fidelity results or active-edge throughput
 benchmarks. CUDA and Python WebGPU example parity are measured on the current
-host. Browser GPU execution is `not tested` here because the available
-Chromium environment has no usable WebGPU adapter; active-edge multi-timestep
-full-scale throughput and biological validation remain `not tested`.
+host. A two-timestep active-edge synthetic stress run on the same full-scale
+artifact is also measured: source `0` has positive edge `0 -> 6` with weight
+`1`; with `threshold=1`, `reset=0`, `decay_shifts=[31]`, and
+`refractory_steps=0`, it produced timestep spike counts `[1, 319]`. Wall time
+was `130.364592` seconds on CPU and `128.487143` seconds on Python WebGPU.
+This stress configuration is not a biological calibration, and the timings are
+not representative of default-model throughput. Browser GPU execution is
+`not tested` here because the available Chromium paths either had no adapter
+or failed `requestDevice` with `dxil.dll` / Windows Error `87`; biological
+validation remains `not tested`.
 
 ## References
 

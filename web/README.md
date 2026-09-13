@@ -56,7 +56,10 @@ npm run test:e2e
 `web/wasm` crate provides the WASM CPU streaming runtime; build it with
 `wasm-pack build --target web --out-dir pkg --release` from that directory.
 `npm run test:e2e` launches Chromium against the page and fails on a runtime
-mismatch. It skips only when Chromium cannot provide a WebGPU adapter; on this
-host that condition was measured, so browser GPU execution remains `not
-tested`. Full-scale MaleCNS throughput is measured separately by the Python
-benchmark, while active-edge multi-timestep browser throughput is `not tested`.
+mismatch. It skips only when Chromium cannot provide a WebGPU adapter. On this
+host headless Chromium reported no adapter in the test configuration; alternate
+paths either failed `requestDevice` with `dxil.dll` / Windows Error `87` or
+returned a non-computing in-app-browser result. Browser GPU execution therefore
+remains `not tested`. Full-scale MaleCNS CPU/Python-WebGPU active stress is
+measured separately, while active-edge multi-timestep browser throughput is
+`not tested`.
