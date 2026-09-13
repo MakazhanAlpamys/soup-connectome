@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "test:e2e": "playwright test e2e/browser.spec.js"
+    "test:e2e": "playwright test e2e/browser.spec.js",
+    "test:e2e:chrome": "node e2e/chrome-smoke.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0"

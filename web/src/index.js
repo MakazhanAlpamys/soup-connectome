@@ -406,18 +406,23 @@ async function createPipelines(device, constants) {
   });
   const stepLayout = layout(6, 0);
   const scatterLayout = layout(8, 1);
-  const pipelineLayout = device.createPipelineLayout({
-    bindGroupLayouts: [stepLayout, scatterLayout],
+  const emptyLayout = device.createBindGroupLayout({ entries: [] });
+  const stepPipelineLayout = device.createPipelineLayout({
+    bindGroupLayouts: [stepLayout],
+  });
+  const scatterPipelineLayout = device.createPipelineLayout({
+    bindGroupLayouts: [emptyLayout, scatterLayout],
   });
   return {
     stepLayout,
     scatterLayout,
+    emptyLayout,
     stepPipeline: device.createComputePipeline({
-      layout: pipelineLayout,
+      layout: stepPipelineLayout,
       compute: { module: shader, entryPoint: "lif_step" },
     }),
     scatterPipeline: device.createComputePipeline({
-      layout: pipelineLayout,
+      layout: scatterPipelineLayout,
       compute: { module: shader, entryPoint: "schedule_edges" },
     }),
   };
@@ -466,18 +471,13 @@ export async function runStreamed({ device, artifact, config, timesteps, initial
   const stepGroup = createBindGroup(device, pipelines.stepLayout, [
     potentialBuffer, refractoryBuffer, spikeBuffer, arrivalBuffer, configBuffer, errorBuffer,
   ]);
-  const dummyEdge = createBuffer(device, new Uint32Array(1), storage);
-  const dummyWeight = createBuffer(device, new Int32Array(1), storage);
-  const dummyConfig = createBuffer(device, new Uint8Array(CONFIG_WORDS * 4), storage);
-  const dummyScatterGroup = createBindGroup(device, pipelines.scatterLayout, [
-    dummyEdge, dummyEdge, dummyWeight, dummyEdge, spikeBuffer, arrivalBuffer, dummyConfig, errorBuffer,
-  ]);
+  const emptyGroup = device.createBindGroup({ layout: pipelines.emptyLayout, entries: [] });
 
   const spikes = [];
   for (let currentBucket = 0; currentBucket < timesteps; currentBucket += 1) {
     device.queue.writeBuffer(configBuffer, 0, configWords(nNeurons, bucketCount, config, currentBucket, 0));
     device.queue.writeBuffer(errorBuffer, 0, new Int32Array(1));
-    dispatch(device, pipelines.stepPipeline, [stepGroup, dummyScatterGroup],
+    dispatch(device, pipelines.stepPipeline, [stepGroup],
       Math.ceil(nNeurons / WORKGROUP_SIZE));
     if (readInt32(await readBuffer(device, errorBuffer, 4, constants))) {
       throw new Error("webgpu fixed-point operation exceeded int32 range");
@@ -505,7 +505,7 @@ export async function runStreamed({ device, artifact, config, timesteps, initial
         spikeBuffer, arrivalBuffer, blockConfig, errorBuffer,
       ]);
       device.queue.writeBuffer(errorBuffer, 0, new Int32Array(1));
-      dispatch(device, pipelines.scatterPipeline, [stepGroup, scatterGroup],
+      dispatch(device, pipelines.scatterPipeline, [emptyGroup, scatterGroup],
         Math.ceil(edgeCount / WORKGROUP_SIZE));
       const error = readInt32(await readBuffer(device, errorBuffer, 4, constants));
       edgeSources.destroy();
@@ -524,7 +524,7 @@ export async function runStreamed({ device, artifact, config, timesteps, initial
   const finalPotentials = Array.from({ length: nNeurons }, (_, index) => potentialView.getInt32(index * 4, true));
   const finalRefractory = Array.from({ length: nNeurons }, (_, index) => refractoryView.getUint32(index * 4, true));
   [potentialBuffer, refractoryBuffer, spikeBuffer, arrivalBuffer, configBuffer, errorBuffer,
-    dummyEdge, dummyWeight, dummyConfig].forEach((buffer) => buffer.destroy());
+  ].forEach((buffer) => buffer.destroy());
   return { spikes, finalPotentials, finalRefractory };
 }
 

@@ -1,140 +1,158 @@
 # soup-connectome
 
-Portable runtime for executing sparse biological connectomes with deterministic
-fixed-point semantics.
+> Portable runtime for executing sparse biological connectomes across CPU, CUDA, WebGPU, and WASM.
 
-The first dataset target is MaleCNS, the male fruit-fly connectome released by
-Janelia. This project is infrastructure: a portable graph artifact, a
-backend-independent integer simulation contract, and explicit residency and
-device planning. It does not claim biological validation and it is not a game
-demo.
+`soup-connectome` turns a sparse connectome into a portable `.scx` artifact and
+executes it with deterministic fixed-point LIF semantics. The first dataset
+target is [MaleCNS](https://male-cns.janelia.org/), the male fruit-fly
+connectome released by Janelia.
 
-## Current status
+This is infrastructure, not a game demo: the project focuses on graph storage,
+streaming, backend parity, and explicit device planning. It does not claim
+biological validation.
 
-Implemented:
+## Status at a glance
 
-- CPU fixed-point LIF runtime;
-- resident and disk-backed CPU streamed execution;
-- optional resident and streamed CUDA backend with fixed-point tensor execution;
-- optional resident and streamed WebGPU backend with canonical WGSL integer kernels;
-- dependency-free browser WebGPU host for streamed `.scx` artifacts;
-- optional wasm-bindgen CPU streaming runtime and validation boundary;
-- mmap-friendly `.scx` graph artifacts with CSR `.scb` blocks;
-- local MaleCNS Feather adapter with an explicit curated-node filter;
-- deterministic example graph and golden spike train;
-- planner, backend allowlist, and Typer/Rich CLI;
-- format, arithmetic, CLI, and resident/streamed parity tests.
+| Capability | Status | Evidence |
+| --- | --- | --- |
+| CPU resident + streamed runtime | `measured` | Full test suite and MaleCNS smoke |
+| CUDA resident + streamed backend | implemented | Optional; full-scale CUDA performance `not tested` |
+| Python WebGPU resident + streamed backend | `measured` | Example parity and MaleCNS smoke |
+| Browser WebGPU host | `measured` | Fixture passes in installed Chrome `153.0.8010.37` |
+| WASM CPU streaming runtime | `measured` | Generated web/node bindings and parity fixture |
+| MaleCNS `.scx` artifact | `measured` | `211,577` neurons, `24,678,466` edges |
+| Biological/scientific validation | `not tested` | LIF parameters are runtime configuration |
 
-Not implemented:
+## Validation snapshot
 
-- browser UI/demo application;
-- automatic MaleCNS downloads or a networked data pipeline;
-- biological or scientific validation of LIF parameters;
-- morphology and EM-volume simulation.
+The local curated MaleCNS artifact contains `211,577` neurons and
+`24,678,466` included edges across three streamed CSR blocks.
 
-Explicit `cuda` and `webgpu` select their optional backends and report typed
-unavailable errors when the optional runtime or host device cannot execute
-them. Neither selection falls back silently to CPU. `auto` currently resolves
-to CPU by design.
+| Run | Result |
+| --- | --- |
+| Full-scale, one timestep, zero initial spikes, CPU | `2.245442 s`, `0` spikes — `measured` |
+| Full-scale, one timestep, zero initial spikes, Python WebGPU | `2.695649 s`, `0` spikes — `measured` |
+| Full-scale, two-timestep active synthetic stress, CPU | `130.364592 s`, spike counts `[1, 319]` — `measured` |
+| Same active synthetic stress, Python WebGPU | `128.487143 s`, spike counts `[1, 319]` — `measured` |
+| Browser WebGPU ↔ WASM parity fixture in installed Chrome | `PASS` — `measured` |
 
-## Install
+The active stress configuration uses `threshold=1`, `reset=0`,
+`decay_shifts=[31]`, and `refractory_steps=0`; it is a propagation test, not
+a biological calibration or representative throughput benchmark.
+
+![Browser WebGPU and WASM parity result](docs/assets/browser-e2e-chrome.png)
+
+*Measured browser E2E result from installed Chrome on the local Windows host.*
+
+## Why this runtime
+
+Large sparse graphs create a different deployment problem from a conventional
+dense neural model. The runtime keeps neuron state and the delay line resident
+while streaming sparse source blocks, so graph residency is an explicit axis:
+
+```text
+MaleCNS Feather files
+        │
+        ▼
+local adapter + sign mapping
+        │
+        ▼
+portable .scx artifact
+        │
+        ├── CPU resident / streamed
+        ├── CUDA resident / streamed
+        ├── Python WebGPU resident / streamed
+        └── browser WebGPU streamed / WASM CPU fallback
+```
+
+Streaming is a memory-shape and portability feature. It is not automatically a
+throughput guarantee: the current streamed accelerator paths validate and
+transfer one active source block at a time and do not use a prefetch cache.
+
+## Quick start
+
+Install the core package and development/data extras:
 
 ```bash
 python -m pip install -e ".[dev,data]"
-# Optional CUDA backend:
+```
+
+Optional backends:
+
+```bash
 python -m pip install -e ".[dev,data,cuda]"
-# Optional WebGPU backend:
 python -m pip install -e ".[dev,data,webgpu]"
 ```
 
-The core package does not depend on PyTorch or another accelerator runtime.
-The CUDA extra uses PyTorch lazily; importing the planner, CPU backend, or graph
-format does not import it. The WebGPU extra uses `wgpu` lazily and executes the
-same fixed-point contract through WGSL. The browser host lives in `web/` and
-has no npm runtime dependencies; run its parser, shader-contract, and optional
-browser E2E checks from that directory. The optional `web/wasm` crate includes
-the CPU streaming runtime and is built with `wasm-pack --target web`.
-
-## Run the example
+Run the deterministic fixture:
 
 ```bash
 soup-connectome run --dataset example --device cpu
 soup-connectome run --dataset example --device cpu --residency streamed
-soup-connectome run --dataset example --device cuda --residency streamed
-soup-connectome run --dataset example --device webgpu
 soup-connectome run --dataset example --device webgpu --residency streamed
 soup-connectome plan --dataset example --device cpu
-soup-connectome benchmark --device auto
 ```
 
-Run output is labeled `measured` because it comes from an actual execution.
-Planner capacity is labeled `not tested` when no capacity is supplied; graph
-byte requirements are design estimates, not a hardware benchmark.
+Explicit `cuda` and `webgpu` never silently fall back to CPU. `auto` resolves
+to CPU by design.
 
-## Canonical arithmetic
+## Browser E2E
 
-The cross-backend contract uses signed `int32` membrane potential with a design
-scale of `2^16` voltage quanta per unit, signed `int16` synaptic impulses, and
-positive integer timestep delays. These are representation choices, not
-measured biological constants.
+The browser host is a low-level runtime boundary, not a demo UI. Build the
+WASM package and serve `web/` locally:
 
-Leak uses arithmetic shifts rather than general multiplication:
-
-```text
-V := V - (V >> k)
+```bash
+cd web/wasm
+wasm-pack build --target web --out-dir pkg --release
+python -m http.server 8765 --directory ..
 ```
 
-The resulting leak factors are discrete by design. Signed `int32` overflow is
-checked and rejected; wraparound is not part of the runtime semantics.
+For the optional Playwright check:
 
-## Graph artifacts
-
-An artifact is a local directory:
-
-```text
-graph.scx/
-  manifest.json
-  neurons.bin
-  blocks/
-    block_00000.scb
+```bash
+cd web
+npm install
+npx playwright install chromium
+npm run test:e2e
 ```
 
-The manifest records source provenance, license, dtypes, quantization metadata,
-scope, block ranges, and SHA-256 checksums. Blocks use source-indexed CSR.
-Resident loading materializes all blocks, while `--residency streamed` opens
-the artifact lazily and reads/validates one block at a time. This is a
-correctness and memory-shape implementation, not a throughput claim; streamed
-I/O performance is `not tested`. The CUDA and WebGPU streamed paths transfer
-one active source block at a time and currently have no prefetch cache. The
-current example writer accepts local in-memory graph data; it does not fetch
-remote files.
+To test a real installed browser explicitly on Windows:
 
-## Convert local MaleCNS files
+```powershell
+$env:SOUP_CONNECTOME_E2E_EXECUTABLE = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+npm run test:e2e:chrome
+```
 
-The adapter requires three files supplied by the user: connection weights, body
-annotations, and body neurotransmitters. It never downloads them. Inspect each
-local Feather schema first:
+The default test fails on a runtime mismatch and skips only when bundled
+Chromium cannot provide a WebGPU adapter. `test:e2e:chrome` requires the
+explicitly selected installed browser and fails unless the WebGPU/WASM fixture
+passes.
+
+## MaleCNS data workflow
+
+The adapter is local-only and never downloads data automatically. It requires:
+
+- connection weights;
+- body annotations;
+- body neurotransmitters.
+
+For the verified MaleCNS v1.0 download, the measured columns are:
+
+| File | Columns |
+| --- | --- |
+| weights | `body_pre`, `body_post`, `weight` |
+| annotations | `bodyId`, `type`, `somaSide` |
+| neurotransmitters | `body`, `consensus_nt` |
+
+Inspect local schemas first:
 
 ```bash
 soup-connectome inspect --file path/to/body-annotations.feather
 soup-connectome inspect --file path/to/body-neurotransmitters.feather
 ```
 
-For the verified MaleCNS v1.0 files, the measured column mapping is:
-
-- weights: `body_pre`, `body_post`, `weight`;
-- annotations: `bodyId`, `type`, `somaSide`;
-- neurotransmitters: `body`, `consensus_nt`.
-
-The official weights table is a segment-to-segment graph, while the annotation
-table is a curated subset. For the first local artifact, use
-`--node-filter annotations` so the graph contains only curated annotation IDs.
-This is an explicit data-scope choice, not a claim that the raw segment graph is
-biologically incomplete. `raw_endpoints` remains available, but full-scale raw
-endpoint conversion is currently `not tested` for memory and runtime.
-
-Use an explicit sign mapping and explicitly exclude labels for which this
-fixed-point runtime has no globally verified static sign:
+The first artifact uses the curated annotation node filter and this explicit
+sign mapping:
 
 ```bash
 soup-connectome convert \
@@ -158,57 +176,70 @@ soup-connectome convert \
   --node-filter annotations
 ```
 
-Rows are scanned in batches, externally sorted by source, and emitted as source
-blocks. Full `raw_endpoints` conversion builds a temporary disk-backed uint64
-ID index instead of keeping the complete external-ID-to-dense-ID mapping in
-RAM; the temporary SQLite file is removed after conversion. This bounds the
-converter's ID-index memory pressure, but the full-scale RAM and runtime impact
-is not tested. The default delay and chunk sizes are chosen representation
-estimates, not measured biological or performance bounds. Weight overflow
-rejects the conversion by default; `--overflow saturate` records the saturation
-count in the manifest. `--exclude-neurotransmitter` is repeatable, and
-excluded-edge counts are stored in the manifest.
+The local download measured `151,856,684` weight rows, `211,577` annotation
+rows, `1,835,518` neurotransmitter rows, and `1,109,008,094` bytes across the
+three Feather files. These are measurements for this exact download, not
+universal hardware requirements. Raw data, generated artifacts, WASM build
+outputs, and browser test results are intentionally ignored by Git.
 
-For MaleCNS, use the connection weights, body annotations, and
-neurotransmitter files described by the [Janelia download page](https://male-cns.janelia.org/download/).
-The local download measured `151,856,684` weight rows, `211,577` annotation rows,
-and `1,835,518` neurotransmitter rows. The three local Feather files measured
-`1,109,008,094` bytes in total. These are local measurements for this exact
-download, not universal hardware requirements.
-The larger EM-related files are not required and must not be downloaded by this
-project.
+## Runtime contract
 
-## Evidence policy
+The backend-independent simulation contract uses:
 
-Quantitative claims are tagged in code and documentation:
+- signed `int32` membrane potentials;
+- signed `int16` synaptic impulses;
+- positive integer timestep delays;
+- checked arithmetic with rejected overflow;
+- arithmetic-shift leak: `V := V - (V >> k)`.
+
+These are representation choices, not measured biological constants.
+
+## Development and tests
+
+```bash
+python -m pytest -q
+python -m ruff check .
+python -m ruff format --check .
+
+cd web
+npm test
+npm run test:e2e
+
+cd wasm
+cargo fmt --check
+cargo test
+cargo check --target wasm32-unknown-unknown
+```
+
+The repository uses three evidence labels:
 
 - `measured` — produced by an actual local run or benchmark;
 - `estimated` — a design calculation or planning assumption;
 - `not tested` — no local evidence yet.
 
-The local curated conversion is measured at `211,577` neurons,
-`24,678,466` included edges, `1,349,920` excluded edges, and `0` saturated
-weights. Checksum loading and a one-timestep CPU smoke-run passed. A full-scale
-one-timestep zero-spike smoke on that exact artifact is measured at
-`2.245442` seconds on CPU and `2.695649` seconds on Python WebGPU, with
-`spikes=0` in both runs. These are artifact-validation and loader/runtime
-measurements, not biological fidelity results or active-edge throughput
-benchmarks. CUDA and Python WebGPU example parity are measured on the current
-host. A two-timestep active-edge synthetic stress run on the same full-scale
-artifact is also measured: source `0` has positive edge `0 -> 6` with weight
-`1`; with `threshold=1`, `reset=0`, `decay_shifts=[31]`, and
-`refractory_steps=0`, it produced timestep spike counts `[1, 319]`. Wall time
-was `130.364592` seconds on CPU and `128.487143` seconds on Python WebGPU.
-This stress configuration is not a biological calibration, and the timings are
-not representative of default-model throughput. Browser GPU execution is
-`not tested` here because the available Chromium paths either had no adapter
-or failed `requestDevice` with `dxil.dll` / Windows Error `87`; biological
-validation remains `not tested`.
+## Limitations
+
+- No biological calibration or scientific fidelity claim is made.
+- Morphology and EM-volume simulation are out of scope for the current phase.
+- Automatic MaleCNS downloads and a networked data pipeline are not included.
+- Full-scale active stress is measured for two timesteps with a synthetic
+  configuration; longer runs on the Python reference path are `not tested`.
+- Browser compatibility across GPU vendors and operating systems is `not tested`.
+
+## Repository map
+
+```text
+src/soup_connectome/   runtime, graph format, adapters, backends, CLI
+tests/                 Python contract and parity tests
+web/src/               browser WebGPU and WASM streaming host
+web/wasm/              wasm-bindgen CPU runtime
+web/test/              browser parity fixture
+docs/                  project documentation
+```
 
 ## References
 
 - [MaleCNS](https://male-cns.janelia.org/)
 - [MaleCNS download](https://male-cns.janelia.org/download/)
-- [Google Research announcement](https://research.google/blog/a-connectomics-milestone-mapping-the-complete-male-fruit-fly-brain/)
 - [Soup](https://github.com/MakazhanAlpamys/Soup)
-- [Existing LIF implementation](https://github.com/eonsystemspbc/fly-brain)
+- [Google Research connectomics announcement](https://research.google/blog/a-connectomics-milestone-mapping-the-complete-male-fruit-fly-brain/)

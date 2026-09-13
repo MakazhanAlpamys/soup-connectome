@@ -52,14 +52,24 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
+To use an installed system browser explicitly, set
+`SOUP_CONNECTOME_E2E_EXECUTABLE` to its executable path. The current Windows
+host produced `PASS` in Chrome `153.0.8010.37` with an Intel Gen-12LP adapter:
+
+```powershell
+$env:SOUP_CONNECTOME_E2E_EXECUTABLE = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+npm run test:e2e:chrome
+```
+
 `npm test` runs parser and shader-contract tests in Node. The optional
 `web/wasm` crate provides the WASM CPU streaming runtime; build it with
 `wasm-pack build --target web --out-dir pkg --release` from that directory.
-`npm run test:e2e` launches Chromium against the page and fails on a runtime
-mismatch. It skips only when Chromium cannot provide a WebGPU adapter. On this
-host headless Chromium reported no adapter in the test configuration; alternate
-paths either failed `requestDevice` with `dxil.dll` / Windows Error `87` or
-returned a non-computing in-app-browser result. Browser GPU execution therefore
-remains `not tested`. Full-scale MaleCNS CPU/Python-WebGPU active stress is
-measured separately, while active-edge multi-timestep browser throughput is
-`not tested`.
+`npm run test:e2e` launches bundled Chromium against the page and fails on a
+runtime mismatch; it skips only when Chromium cannot provide a WebGPU adapter.
+`npm run test:e2e:chrome` launches the explicitly selected installed browser
+and requires `PASS`. On this host the bundled headless Chromium reported no
+adapter, while installed Chrome passed the fixture. The in-app browser still
+returned a non-computing result. Browser fixture execution is therefore
+`measured` for installed Chrome and `not tested` for the in-app-browser path.
+Full-scale MaleCNS CPU/Python-WebGPU active stress is measured separately,
+while active-edge multi-timestep browser throughput is `not tested`.

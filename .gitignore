@@ -12,3 +12,4 @@ web/node_modules/
 web/test-results/
 .chrome-e2e-profile/
 .chrome-e2e-profile-3/
+docs/superpowers/
